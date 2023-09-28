@@ -1,204 +1,190 @@
 # pytorch modules
-import torch
-from torch.utils.data import Dataset, Subset, DataLoader, RandomSampler
-from torchvision import transforms
+import torch 
+from torch.utils.data import WeightedRandomSampler, DataLoader # wraps the data so its iterable
+from torch import nn # nn class our model inherits from
+import torch.optim as optim
+from torchmetrics import Accuracy
 
-from typing import List, Dict, Any, Tuple
-from collections import defaultdict
-import random
+import tqdm
 
-class CustomDataset(Dataset):
-    def __init__(self, images, labels):
-        self.images = images
-        self.labels = labels
+import FSL_models as fsl
 
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, idx):
-        image = self.images[idx]
-        label = self.labels[idx]
-        return image, label
-
-class STM_bright_features(Dataset):
-
-    def __init__(self, images, labels,
-            features: List[str] = None):# a list of features in the dataset e.g. dangling bond
-            # sizes: float = 1.0, # this is another thing that could be fed into it to help distinguish different features
-                                 # since they're not all of the same size. For now we make all of them 11 pixels big
-            # we could include other meta data in here too
-        # )
-
-        self.all_features = ['singling dangling bond', 'double dangling bond' ,
-                             'As A' , 'As B', 'single DV on Si(001)', 'siloxane',
-                             'C defect', 'single dihydride', 'singling dangling bond', 'double dangling bond' ,
-                             'As A inv' , 'As B inv', 'single DV on Si(001) inv', 'siloxane inv',
-                             'C defect inv', 'single dihydride inv', 'h1', 'h2', 't1', 'g1', 'm1', 
-                             'TiO2_vacancy', 'TiO2_hydroxyl']
-
-        self.features = features
-        #self.sizes = sizes
-
-        self.images = images
-        self.labels = labels
-
-        # all crops should be of size (15,15)
-        self.transform = transforms.Resize((40,40))
-
-        # select only the images that are given in the features list
-        self.refine_images()
-
-    @property
-    def classlist(self) -> List[str]: # returns a list of strings
-        return self.features
-
-    @property
-    def class_to_indices(self) -> Dict[str, List[int]]:
-        # takes in a string describing the class, returns a dictionary with the class
-        # string as its key and a list with the indices of that class as its value
-        if not hasattr(self, "_class_to_indices"):
-            self._class_to_indices = defaultdict(list)
-            for i, image in enumerate(self.images):
-                self._class_to_indices[self.features[int(self.labels[i])]].append(i)
-
-        return self._class_to_indices
-
-    def refine_images(self):
-        # picks out the images (and their corresponding labels) according to what was given
-        # in the features list
-        fin_indices = [] # list that will conatin the indices of the features we want in this dataset
-        for feature in self.all_features:
-            if feature in self.features:
-                fin_indices.append(self.all_features.index(feature))
-        # images is of shape (num_samples, channels, res, res), labels is of shape (num_samples)
-        fin_images = []
-        fin_labels = []
-        # the labels atm are from 0 to len(all_features)-1. If we have a dataset consisting of
-        # a list less than all_features, then we need to reassign the labels so they go from
-        # 0 to len(features)-1.
-        for idx, i in zip(fin_indices, range(len(fin_indices)) ):
-            # num of samples in this class
-            num_samples_class = self.labels[self.labels==idx].shape
-            # give this a new y_true label
-            fin_labels.append(i*torch.ones(num_samples_class))
-            fin_images.append(self.images[self.labels==idx,:,:,:])
-
-        self.images = torch.vstack(fin_images)
-        self.labels = torch.hstack(fin_labels)
-
-        return
+#############################
+### saving function
+#############################
+# Function to save the model
+def save_model(model, path):
+    torch.save(model.state_dict(), path)
 
 
-    def __len__(self):
-        return len(self.images)
+#############################
+### training and testing simpleshot
+#############################
 
-
-    def __getitem__(self, idx) -> Dict:
-        # takes in an index and returns a dictionary in the form
-        # data = {'label' = y_value, 'image' = stm crop}
-
-        data = {}
-
-        data['label'] = self.labels[idx]
-
-        data['image'] = self.images[idx]
-
-        if data['image'].shape != (40,40):
-          data['image'] = self.transform(data['image'])
-
-        return data
+# test accuracy function
+# test accuracy function
+def testAccuracy(model, dataloader, device):
     
-class EpisodeDataset(Dataset):
+    model.eval()
+    accuracy = 0.0
+    total = 0.0
+    
+    with torch.no_grad():
+        for data in dataloader:
+            crops, labels = data
+            total += labels.size(0)
+            crops, labels = crops.to(device), labels.to(device)
+            # run the model on the test set to predict labels
+            outputs = model(crops.float())
+            # the label with the highest energy will be our prediction
+            _, predicted = torch.max(outputs.data, 1)
+            labels = labels# torch.max(labels.data, 1)
+            accuracy += (predicted == labels).sum().item()
+    
+    # compute the accuracy over all test images
+    accuracy = (100 * accuracy / total)
+    
+    return(accuracy)
 
-    def __init__(self,
-        dataset,
-        n_way = 4, # The number of classes to sample per episode.
-        n_support = 3, # The number of samples per class to use as support.
-        n_query = 20, # The number of samples per class to use as query.
-        n_episodes = 100, # The number of episodes to generate.
-    ):
-        self.dataset = dataset
+def train(model, dataloader_train, dataloader_test, loss_, num_epochs, path, device, optimizer):
+    # define lists to store accuracy gain as we train
+    train_acc_gain = []
+    test_acc_gain = []
+    
+    best_accuracy = 0
+    best_loss = float('inf')
 
-        self.n_way = n_way
-        self.n_support = n_support
-        self.n_query = n_query
-        self.n_episodes = n_episodes
+    model = model.to(torch.float)
+    model.train()
+    # Iterate over the training data
+    for epoch in range(num_epochs):
+        running_train_loss = 0.0
+        running_test_loss = 0.0
+        
+        # train the model
+        model.train()
+        for i, (crops, labels) in enumerate(dataloader_train):
+            # Get the crops and labels
+            crops, labels = crops.to(device), labels.to(device)
+            # Zero the parameter gradients
+            optimizer.zero_grad()
+            # get prediction
+            outputs = model(crops.float())
+            loss = loss_(outputs.double(), labels)
+            running_train_loss += loss.item()
+        
+            # Backward pass
+            loss.backward()
+            optimizer.step()
 
-    def __getitem__(self, index:int) -> Tuple[Dict,dict]:
-        # This method returns an episode from the dataset
+        accuracy = testAccuracy(model, dataloader_train, device)
+        print('epoch', epoch, 'train accuracy over whole train set: %d %%' % (accuracy))
+            
+        # save the model if the accuracy is the best
+        #if accuracy > best_accuracy:
+        #    save_model(model, path)
+        #    best_accuracy = accuracy
+                
+        # get the test accuracy
+        model.eval()
+        for i, (crops, labels) in enumerate(dataloader_test):
+            # Get the crops and labels
+            crops, labels = crops.to(device), labels.to(device)
+            # get prediction and loss
+            pred = model(crops.float())
+            loss = loss_(pred.double(), labels)
+            
+            running_test_loss += loss.item()
+            
+        accuracy = testAccuracy(model, dataloader_test, device)
+        print('epoch', epoch, 'test accuracy over whole test set: %d %%' % (accuracy))
 
-        # seed a random sampler so the index always returns the same episode.
-        rng = random.Random(index)
+        # save the model if the accuracy is the best
+        if accuracy > best_accuracy:
+            print('Saving model from epoch', epoch)
+            save_model(model, path)
+            best_accuracy = accuracy
+        elif accuracy == best_accuracy:
+            if running_test_loss<best_loss:
+                print('Saving model from epoch', epoch)
+                save_model(model, path)
+                best_loss = running_test_loss
+        
+        
 
-        # pick out n_way classes for this episode
-        episode_classlist = rng.sample(self.dataset.classlist, self.n_way)
+        print('Epoch: %d loss: %.3f' % (epoch + 1, running_test_loss / len(dataloader_test)))
 
-        support, query = [], []
-        for c in episode_classlist:
-            # go through each class and make up the support and query datasets
 
-            # dataset indices for this class
-            all_indices = self.dataset.class_to_indices[c]
+#############################
+### training and testing proto/match/relation nets
+#############################
 
-            # sample the support and query sets for this class
-           # print(all_indices, self.n_support,self.n_query)
-            indices = rng.sample(all_indices, self.n_support + self.n_query)
-            items = [self.dataset[i] for i in indices] # this will be a list of dictionaries
+def train_evaluate(fslNet, file_name, train_loader, test_loader, epochs = 1, onehot=True):
+    # define the FSL
+    learner = fsl.FewShotLearner(fslNet)
 
-            # we define a new label, or target, for each class for this episode and assign
-            # it to the image. This is so it more closely resembles what it will end up
-            # doing in the end.
-            for item in items:
-                item["target"] = torch.tensor(episode_classlist.index(c))
+    # train
+    trainer = pl.Trainer(accelerator="gpu", devices = 1, max_epochs=epochs)
+    trainer.fit(learner, train_loader, val_dataloaders=test_loader)
 
-            # split the support and query sets
-            support += items[:self.n_support]
-            query += items[self.n_support:]
+    # save
+    save_model(learner, file_name + '.pth')
 
-        # now we have 2 lists
-        # each item in the list is a dictionary
-        # each dictionary is of the form {'label': true y_value, 'image': stm crop, 'target': y_value for this episode'}
-        # we want to collate all of these dictionaries so that we have two large dictionaries that can be used easily for batch training
-        # i.e they should be of the form
-        # support = {'image': numpy array of shape (number of crops, num_channels, res, res),
-        #            'target': numpy array of shape (number of crops, y_values for this episode) }
-        # (we don't include the true y_values as they're not needed and this will speed up computation)
-        # and similar for the query dict
+    # evaluate
+    learner.eval()
+    learner = learner.to(DEVICE)
+    # instantiate the accuracy metric
+    metric = Accuracy(task = 'multiclass', num_classes=n_way).to(DEVICE)
+    # collect all the embeddings in the test set
+    # so we can plot them later
+    embedding_table = []
+    pbar = tqdm.tqdm(range(len(test_episodes)))
+    for episode_idx in pbar:
+        support, query = test_episodes[episode_idx]
 
-        # collate the support and query sets
-        support = self.collate_dicts(support)
-        query = self.collate_dicts(query)
+    # get the embeddings
+    logits = learner.FSLnet(query, support)
+    if not onehot:
+        logits = torch.round(logits)
+    #print(query['target'].device)
+    # compute the accuracy
+    acc = metric(logits, query["target"].to(DEVICE))
+    pbar.set_description(f"Episode {episode_idx} // Accuracy: {acc.item():.2f}")
+    # compute the total accuracy across all episodes
+    total_acc = metric.compute()
+    print(f"Total accuracy, averaged across all episodes: {total_acc}")
 
-        # add a list of the possible outsomes to the support and query dictionaries
-        support["classlist"] = episode_classlist
-        query["classlist"] = episode_classlist
+    return learner, metric, total_acc
 
-        return support, query
+def evaluate(learner, ds, type_net, n_way, n_support, device, embeddings=True):
+    # type_net should be one of 'protonet', 'matchnet', 'relnet', 'simple shot', or 'knn_net'
+    # evaluate
+    learner.eval()
+    learner = learner.to(device)
+    # instantiate the accuracy metric
+    metric = Accuracy(task = 'multiclass', num_classes=n_way).to(device)
+    # collect all the embeddings in the test set
+    # so we can plot them later
+    embedding_table = []
+    pbar = tqdm.tqdm(range(len(ds)))
+    for episode_idx in pbar:
+        support, query = ds[episode_idx]
+    
+        if type_net == 'simpleshot':
+            # get the predictions
+            logits = learner.FSLnet(query, support, n_way)
+        elif type_net=='knn_net':
+            logits = learner.FSLnet(query, support, neighbors=n_support, embeddings = embeddings)
+        else:
+            logits = learner.FSLnet(query, support)
+        
+        #print(query['target'].device)
+        # compute the accuracy
+        #print(logits.shape, query["target"].shape)
+        acc = metric(logits, query["target"].to(device))
+        pbar.set_description(f"Episode {episode_idx} // Accuracy: {acc.item():.2f}")
+        # compute the total accuracy across all episodes
+        total_acc = metric.compute()
+    print(f"Total accuracy, averaged across all episodes: {total_acc}")
 
-    def __len__(self):
-        return self.n_episodes
-
-    def episode_info(self, support, query):
-        # gives a summary of the episode.
-
-        print("Support Set:")
-        print("Classlist: {}".format(support['classlist']) )
-        print("Image Shape: {}".format(support['image'].shape) )
-        print("Target Shape: {}".format(support['target'].shape) )
-        print()
-        print("Query Set:")
-        print("Classlist: {}".format(query['classlist']) )
-        print("Image Shape: {}".format(query['image'].shape) )
-        print("Target Shape: {}".format(query['target'].shape) )
-
-    def collate_dicts(self, list_of_dicts):
-        images = []
-        targets = []
-        for item in list_of_dicts:
-            images.append(item['image'])
-            targets.append(item['target'])
-
-        images = torch.stack(images, dim=0)
-        targets = torch.stack(targets, dim=0)
-
-        return {'image': images, 'target':targets}
+    return learner, metric, total_acc
