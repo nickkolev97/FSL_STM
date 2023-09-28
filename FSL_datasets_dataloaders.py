@@ -262,3 +262,9 @@ class EpisodeDataset(Dataset):
 ### random rotation from a discrete set of angles
 ########################################
 class rotation(object):
+    def __init__(self, angles = [90,180,270,360]):
+        self.angles = angles
+
+    def __call__(self, img):
+        angle = random.choice(self.angles)
+        return F.rotate(img, angle)
