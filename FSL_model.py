@@ -5,19 +5,68 @@ import math
 
 # pytorch modules
 import torch
-from torch.utils.data import Dataset, Subset, DataLoader, RandomSampler
 import torch.nn as nn 
-import torch.optim as optim
 from torchmetrics import Accuracy
 import pytorch_lightning as pl
 import tqdm
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torchvision import transforms
 
-from typing import List, Dict, Any, Tuple
-from collections import defaultdict
-import random
 
+###################################
+### embedding network which is kept the same for every FSL network
+### we use a standard conv4-net 
+###################################
+def init_layer(L):
+    # Initialization using fan-in
+    if isinstance(L, nn.Conv2d):
+        n = L.kernel_size[0]*L.kernel_size[1]*L.out_channels
+        L.weight.data.normal_(0,math.sqrt(2.0/float(n)))
+    elif isinstance(L, nn.BatchNorm2d):
+        L.weight.data.fill_(1)
+        L.bias.data.fill_(0)
+
+class ConvBlock(nn.Module):
+    def __init__(self, indim, outdim, pool = True, padding = 1):
+        super(ConvBlock, self).__init__()
+        self.indim  = indim
+        self.outdim = outdim
+        self.C      = nn.Conv2d(indim, outdim, 3, padding= padding)
+        self.BN     = nn.BatchNorm2d(outdim)
+        self.relu   = nn.ReLU(inplace=True)
+
+        self.parametrized_layers = [self.C, self.BN, self.relu]
+
+        self.pool   = nn.MaxPool2d(2)
+        self.parametrized_layers.append(self.pool)
+
+        for layer in self.parametrized_layers:
+            init_layer(layer)
+
+        self.trunk = nn.Sequential(*self.parametrized_layers)
+
+
+    def forward(self,x):
+        out = self.trunk(x)
+        return out
+
+class ConvNet(nn.Module):
+    def __init__(self):
+        super(ConvNet,self).__init__()
+        trunk = []
+        for i in range(4):
+            indim = 2 if i == 0 else 64
+            outdim = 64
+            B = ConvBlock(indim, outdim, pool = True)
+            trunk.append(B)
+        trunk.append(nn.Flatten())
+
+        self.trunk = nn.Sequential(*trunk)
+
+
+    def forward(self,x):
+        out = self.trunk(x)
+        return out
 
 ###################################
 ### embedding network which is kept the same for every FSL network 
@@ -66,12 +115,13 @@ class EmbeddingNetwork(nn.Module):
 ###################################
 class MatchingNetwork(nn.Module):
 
-    def __init__(self, channels, crop_size):
+    def __init__(self, device):
         super().__init__()
         # define the embedding layer
-        self.embedding_layer = EmbeddingNetwork(channels, crop_size)
+        self.embedding_layer = ConvNet()
         self.cos_dist = nn.CosineSimilarity(dim=1)
         self.softmax = nn.Softmax(dim=0)
+        self.device = device
 
     def forward(self, query, support):
         # compute embeddings for query and support sets
@@ -105,24 +155,22 @@ class MatchingNetwork(nn.Module):
       #  y = torch.matmul(support["target"].float().to(DEVICE), support["attentions"]).float()
 
         # output using one hot encoding for targets (got better accuracy)
-        y = torch.matmul( support["attentions"].T, torch.nn.functional.one_hot(support["target"]).float().to(DEVICE) )
+        y = torch.matmul( support["attentions"].T, torch.nn.functional.one_hot(support["target"]).float().to(self.device) )
 
         # the final predictions should be (where we use einstein summation convention):
         # y = a(x,x_i)y_i. With a(x,x_i) = e^{c(f(x),g(x_i))}/sum_{j=1}^{k}e^{c(f(x),g(x_j))}
 
         return y
 
-
-
 ###################################
 ### Prototypical network implementation
 ###################################
 class PrototypicalNetwork(nn.Module):
 
-    def __init__(self, channels, crop_size):
+    def __init__(self):
         super().__init__()
         # define the embedding layer
-        self.embedding_layer = EmbeddingNetwork(channels, crop_size)
+        self.embedding_layer = ConvNet()
 
 
     def forward(self, query, support):
@@ -166,65 +214,76 @@ class PrototypicalNetwork(nn.Module):
 ###################################
 class RelationNetwork(nn.Module):
 
-    def __init__(self, channels, crop_size, classes):
+    def __init__(self):
         super().__init__()
         # define the embedding layer
-        self.embedding_layer = EmbeddingNetwork(channels, crop_size)
+        self.embedding_layer = ConvNet()
 
         self.fc_nodes = 100
 
         # the embedding vectors are of size 100, so the input for the first layer
         # will be n_shot*200 (200 since they're concatenated)
+        
+        
         self.relation_module = nn.Sequential(
-            nn.Linear(classes*200, self.fc_nodes),
-            nn.Dropout(0.2),
-            nn.ReLU(),
-            nn.BatchNorm1d(self.fc_nodes),
-            nn.Linear(self.fc_nodes, classes),
-            nn.Dropout(0.2),
-            nn.ReLU(),
-            nn.BatchNorm1d(classes)
-        )
-
+                               nn.Linear(512, self.fc_nodes),
+                               nn.Dropout(0.2),
+                               nn.ReLU(),
+                               nn.BatchNorm1d(self.fc_nodes),
+                               nn.Linear(self.fc_nodes, self.fc_nodes),
+                               nn.Dropout(0.2),
+                               nn.ReLU(),
+                               nn.BatchNorm1d(self.fc_nodes),
+                               nn.Linear(self.fc_nodes, 1),
+                               nn.Dropout(0.2),
+                               nn.ReLU(),
+                        )
+        
     def forward(self, query, support):
         # compute embeddings for query and support sets
+        # input is a (num_channels, res, res)
         support["embeddings"] = self.embedding_layer(support["image"]) # f(x)
         query["embeddings"] = self.embedding_layer(query["image"]) # g(x_i), for us g = f
-
+        
         # sum up the embeddings of the support vectors in the same class
         support_embeds = []
         for idx in range(len(support["classlist"])):
             embeds = support["embeddings"][support["target"] == idx]
             support_embeds.append(embeds)
+            
         # support_embeds is a list of torch tensors of shape
         # (n_support, dimensions of embedding vector space)
-
+        
         support_embeds = torch.stack(support_embeds)
         # support_embeds now a tensor of shape
-        # (n_shot, n_support, dimensions of embedding vector space)
-
+        # (n_way, n_support, dimensions of embedding vector space)
+        
         # we compute the sums of these support vectors
+        # sums has shape (n_way, dimensions of embedding vector)
         sums = support_embeds.sum(dim=1)
-        support["sums"] = sums #/torch.sum(sums)
-
-        # each query vector now needs to be concatenated with each sum support vector
-        # i.e. change each query vector from shape (dimensions of embedding vector space) to shape (n_shot, 2*dimensions of embedding vector)
-        # overall, needs to be (n_query, n_shot,  2*dimensions of embedding vector)
-        concats = []
-        for vector in support["sums"]:
-          vector = torch.tile(vector.unsqueeze(1), (1, query["embeddings"].shape[0] ))
-          concats.append(torch.cat((query["embeddings"].T, vector), dim=0))
-
-        concats = torch.flatten(torch.stack(concats).T, start_dim=1, end_dim=2)
-        query["concats"] = concats # these will be fed into the relation module
-
-        # feed through relation module
-        relation_score = self.relation_module(concats)
-
-        return relation_score
-
+        support["sums"] = sums/torch.sum(sums)
+        
+        relation_scores = {}
+        for qvector in query['embeddings']:
+            # qvector.shape = (dim_emb)
+            relation_scores[qvector] = []
+            concats = []
+            for svector in sums:
+                # svector.shape = (dim_emb)
+                concat = torch.cat((qvector,svector))
+                # concat.shape = (2*dim_emb)
+                concats.append(concat)
+            relation_scores[qvector] = self.relation_module(torch.stack(concats)).squeeze(1)
+            # relation_scores[qvector].shape = (n_way)
+        
+        # relation_scores is a dictionary that has the query vectors as keys and their relation scores as values
+        fin_rel_scores = torch.stack([rel_score for rel_score in relation_scores.values()])
+        # fin_rel_scores.shape = (n_way*n_query, n_way)       
+        
+        return fin_rel_scores
+    
 ###################################
-### pytorch lightning network
+### pytorch lightning network which trains using episodic training
 ### it can take any of the three networks above (matching, prototypical, or relation)
 ### as the FS network
 ###################################
@@ -233,6 +292,7 @@ class FewShotLearner(pl.LightningModule):
     def __init__(self,
         FSLnet: nn.Module,
         learning_rate: float = 0.001,
+        n_way: int = 5
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['matchnet'])
@@ -270,3 +330,88 @@ class FewShotLearner(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         return self.step(batch, batch_idx, "test")
+    
+###################################
+### simple shot classifier
+###################################
+class SimpleShotEmbed(nn.Module):
+    def __init__(self, classes, crop_size=20):
+        super().__init__()
+        self.embedding_layer = ConvNet()
+        if crop_size == 20:
+            self.dense = nn.Linear(256, classes)
+        if crop_size == 40:
+            self.dense = nn.Linear(256, classes)
+
+    def forward(self, x, training = True):
+        x = self.embedding_layer(x)
+        if training == True:
+            x = self.dense(x)
+            logits = torch.nn.functional.softmax(x,dim=1)
+            return logits
+        else: 
+            x = torch.nn.functional.normalize(x)
+            return x
+
+###################################
+### simple shot fsl network
+###################################
+class SimpleShot(nn.Module):
+    def __init__(self, model):#, channels, crop_size, n_outputs, fc_layers, fc_nodes, dropout):
+        super().__init__()
+        self.classifier = model
+        
+
+    def forward(self, query, support, n_way):
+        # compute embeddings for query and support sets
+        support["embeddings"] = self.classifier(support["image"], training=False)
+        query["embeddings"] = self.classifier(query["image"], training=False)
+        
+        # make an average feature vector for each class
+        average_support_vecs = []
+        for i in range(n_way):
+            average_support_vecs.append( support["embeddings"][support["target"]==i,:].mean(dim=0) )
+        
+        average_support_vecs = torch.stack(average_support_vecs)
+        
+        # L2 normalise output
+        support["embeddings"] = torch.nn.functional.normalize(support["embeddings"])
+        average_support_vecs = torch.nn.functional.normalize(average_support_vecs)
+        # support["embeddings"] i of shape (n_query, dimension of embedding vector)
+        # average_support_vecs is of shape (n_way, dimension of embedding vector)
+        
+        # find euclidean distances between them
+        distances = torch.cdist(query["embeddings"], average_support_vecs, p=2).squeeze(0)     
+        # distances is a tensor of dimensions (n_query, n_ways)
+        distances = distances ** 2
+        
+        logits = torch.argmin(distances, dim=1)
+        
+        support["embeddings_norm"] = torch.nn.functional.normalize(support["embeddings"]) 
+        query["embeddings_norm"] = torch.nn.functional.normalize(query["embeddings"]) 
+        
+        return logits #, distances
+    
+
+class knnNet(nn.Module):    
+    def __init__(self, device):
+        super().__init__()
+        self.classifier = simpleShotembed
+        self.device = device
+
+    def forward(self, query, support, neighbors=1, embeddings=True):
+        KNN = KNeighborsClassifier(n_neighbors=neighbors)
+        
+        if embeddings:
+            # compute embeddings for query and support sets
+            support["embeddings"] = self.classifier(support["image"], training=False)
+            query["embeddings"] = self.classifier(query["image"], training=False)
+        
+            KNN.fit(support["embeddings"].detach().numpy(), support["target"].detach().numpy())
+            y = KNN.predict(query["embeddings"].detach().numpy())
+        else:
+            KNN.fit(torch.flatten(support["image"], start_dim=1, end_dim=-1).detach().numpy(), support["target"].detach().numpy() )
+            y = KNN.predict(torch.flatten(query["image"], start_dim=1, end_dim=-1).detach().numpy())
+            
+        return torch.tensor(y).float().to(self.device)
+        
