@@ -12,11 +12,15 @@ import tqdm
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torchvision import transforms
 
+# debugging module
+from icecream import ic
+
 
 ###################################
 ### embedding network which is kept the same for every FSL network
 ### we use a standard conv4-net 
 ###################################
+
 def init_layer(L):
     # Initialization using fan-in
     if isinstance(L, nn.Conv2d):
@@ -208,6 +212,8 @@ class PrototypicalNetwork(nn.Module):
         logits = - distances
 
         return logits
+
+
 
 ###################################
 ### Relation network implementation
@@ -415,3 +421,121 @@ class knnNet(nn.Module):
             
         return torch.tensor(y).float().to(self.device)
         
+###################################
+### UNet implementation
+###################################
+
+class DoubleConv(nn.Module):
+    """
+    Double convolution that does not change the resolution.
+    Args:
+        n_channels1: number of channels in the input
+        n_channels2: number of channels after first conv layer
+        n_channels3: number of channels after second conv layer
+    
+    Methods:
+        forward: applies the double conv.
+    """
+
+    def __init__(self, n_channels1, n_channels2, n_channels3):
+        super().__init__()
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(n_channels1, n_channels2, kernel_size=3, padding='same'),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(n_channels2, eps=0.001, momentum = 0.99),
+            nn.Conv2d(n_channels2, n_channels3, kernel_size=3, padding='same'),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(n_channels3, eps=0.001, momentum = 0.99))
+
+    def forward(self, x):
+        return self.double_conv(x)
+
+class downsample(nn.Module):
+  """
+  A double convolution followed by a maxpooling layer to downsample.
+    Args:
+    n_channels1: number of channels in the input
+    n_channels2: number of channels after first conv layer
+    n_channels3: number of channels after second conv layer
+  """
+  def __init__(self, n_channels1, n_channels2, n_channels3):
+      super().__init__()
+      self.doubleconvDown = DoubleConv(n_channels1, n_channels2, n_channels3)
+
+
+  def forward(self, x):
+      skip = self.doubleconvDown(x)
+      y = nn.MaxPool2d(2)(skip)
+      y = nn.Dropout(0.3)(y)
+      return skip, y
+
+class upsample(nn.Module):
+  """
+  A transpose convolution (to upsample) followed by a double convolution.
+  Args:
+    n_channels1: number of channels in the input
+    n_channels2: number of channels after first conv layer
+    n_channels3: number of channels after second conv layer
+  """
+  def __init__(self, n_channels1, n_channels2, n_channels3):
+    super().__init__()
+    self.convTranspose = nn.Sequential(nn.ConvTranspose2d(n_channels1, n_channels2, 2 , stride=2))
+
+    self.doubleConv = DoubleConv(n_channels1, n_channels2, n_channels3) #n_channels2 is first because it's concatenated with skip
+
+  def forward(self, skip, x):
+    # upsample
+    x = self.convTranspose(x)
+    # concatenate with the skip
+    x = torch.concatenate([x, skip], axis=1)
+    # dropout
+    x = nn.Dropout(0.3)(x)
+    # double convolution
+    x = self.doubleConv(x)
+    return x
+
+class UNet(nn.Module):
+    """
+    A fully convolutional network that outputs a binary map.
+    """
+    def __init__(self):
+        super().__init__()
+        # downsample 1
+        self.downsample1 = downsample(1, 32, 32)
+        # downsample 2
+        self.downsample2 = downsample(32, 64, 64)
+        # downsample 3
+        self.downsample3 = downsample(64, 128, 128)
+
+        # bottleneck
+        self.bottleneck = DoubleConv(128,256,256)
+    
+        # upsample 1
+        self.upsample1 = upsample(256, 128, 128)
+        # upsample 2
+        self.upsample2 = upsample(128, 64, 64)
+        # upsample 3
+        self.upsample3 = upsample(64, 32, 32)
+
+        # final layer
+        self.output = nn.Sequential(nn.Conv2d(32,2, kernel_size=1, padding="same"))
+
+    def forward(self, x):
+        # downsample 1
+        skip1, x1 = self.downsample1(x)
+        # downsample 2
+        skip2, x2 = self.downsample2(x1)
+        # downsample 3
+        skip3, x3 = self.downsample3(x2)
+        # bottleneck
+        bottleneck = self.bottleneck(x3)
+        # upsample 1
+        x4 = self.upsample1(skip3, bottleneck)
+        # upsample 2
+        x5 = self.upsample2(skip2, x4)
+        # upsample 3
+        x6 = self.upsample3(skip1, x5)
+
+        outputs = self.output(x6)
+
+        return outputs
