@@ -24,7 +24,8 @@ class FSL_Scan(object):
     (these are mostly if it came from an unprocessed .png).
 
     Parameters:
-    - the type of surface this is. One of 'TiO2', 'Si(001)', 'Ge(001)'.
+    - name: user chooses name for this scan.
+    - surface: the type of surface this is. One of 'TiO2', 'Si(001)', 'Ge(001)'.
     - scan_fwd: numpy array of forward scan
     - scan_bwd: if the backward scan is available, input it here, if not, leave this empty.
     - size: only needed if it's a .png file. Real width of scan in nm. 
@@ -42,6 +43,8 @@ class FSL_Scan(object):
     - scan_line_algin: scan line aligns the scans.
     - hyst_correct: hysterisis correction on the forwards and backwards scans 
                     if both are present.
+    -self.resample: resamples scan so that it has the same pixel to nm ratio as
+                    the training data.
 
     Usage Example:
     ```python
@@ -62,10 +65,9 @@ class FSL_Scan(object):
             self.scan_fwd_repeated = False
         self.size = size
         self.res0, self.res1 = scan_fwd.shape
-        if self.res0 not in [2**n for n in range(6,12)]:
-            self.resample()
+        self._resample()
 
-    def resample(self):
+    def _resample(self):
         """
         If array is not of size (2^n, 2^n), n>5, then we want to resample it so that it is.
         This is just due to the way the segmentation algorithm works.
@@ -74,12 +76,16 @@ class FSL_Scan(object):
 
         Returns:
         """
-        # find new resolution which should be from the below list
-        resolutions = [2**n for n in range(6,12)]
-        new_res = resolutions[np.argmin(resolutions-self.res0)]
+        # find new resolution. This depends on what surface it is.
+        if self.surface == 'Si':
+            # 100nm to 512pixels
+            
+        
+        new_res = resolutions[np.argmin(np.array(resolutions)-self.res0)]
         # turn numpy array to torch tensor for resampling
         fwd_tens = torch.tensor(self.scan_fwd)
-        fwd_tens = F.interpolate(fwd_tens, size=(new_res, new_res), mode='bilinear', align_corners=False)
+       # fwd_tens = F.interpolate(fwd_tens, size=(new_res, new_res), mode='bilinear', align_corners=False)
+        fwd_tens = F.interpolate(fwd_tens.unsqueeze(0).unsqueeze(0), size=(1024, 1024), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
         fwd_array = fwd_tens.detach().numpy()
         if self.scan_fwd_repeated==True:
             bwd_array = fwd_array.copy()
@@ -103,6 +109,29 @@ class FSL_Scan(object):
         Returns:
             None
         """
+        leveled_scan_fwd = self._plane_level(self.scan_fwd)
+        self.scan_fwd = leveled_scan_fwd
+
+        if self.scan_fwd_repeated:
+            # if we are using the fwd scan as the bwd too, then just use the array we just levelled.
+            self.scan_bwd = leveled_scan_fwd
+        else:
+            # else, repeat the same procedure with the bwd scan.
+            leveled_scan_bwd = self._plane_level(self.scan_bwd)
+            self.scan_bwd = leveled_scan_bwd
+     
+        return
+
+    def hyst_correct(self):
+        """
+        Performs a hysterisis correction on the forwards and backwards scans.
+
+        Args:
+            self
+
+        Returns:
+            None
+        """
 
     def scan_line_align(self):
         """
@@ -115,16 +144,62 @@ class FSL_Scan(object):
             None
         """
 
-    def hyst_correct(self):
+    def _plane_level(self, array):
         """
-        Performs a hysterisis correction on the forwards and backwards scans.
-
+        Performs plane level on whatever array is given.
         Args:
-            self
-
+            array: array to plane level
         Returns:
-            None
+            array_leveled: the plane leveled array
         """
+        # simple plane level. Assumes the whole scan is on same plane.
+        res = array.shape[0]
+       # print('array shape', array.shape)
+        # plane level using these arrays/masks
+        a = np.ogrid[0:res,0:res]
+        x_pts = np.tile(a[0],res).flatten()
+        y_pts = np.tile(a[1],res).flatten()
+        z_pts = array.flatten()
+        
+        X_data = np.hstack( ( np.expand_dims(x_pts, axis=1) , np.expand_dims(y_pts,axis=1) ) )
+        X_data = np.hstack( ( np.ones((x_pts.size,1)) , X_data ))
+        Y_data = np.reshape(z_pts, (x_pts.size, 1))
+        fit = np.dot(np.dot( np.linalg.pinv(np.dot(X_data.T, X_data)), X_data.T), Y_data)
+        
+        # print("coefficients of equation of plane, (a1, a2) 2: ", fit[0], fit[1])
+        # print("value of intercept, c2:", fit[2] )
+              
+        # make a grid to use for plane subtraction (using numpy's vectorisation)
+        x = np.linspace(0,res, num=res, endpoint = False, dtype=int)
+        y = np.linspace(0,res, num=res, endpoint = False, dtype=int)
+        grid = np.meshgrid(x,y)
+        
+        # perform plane subtraction
+        array_leveled = array - fit[2]*grid[0] - fit[1]*grid[1] - fit[0]
+      
+        '''
+        # this is code for doing a second degree surface subtraction. Stick with first order for now
+        # because the variance when using second order is larger (unsurprisingly, this is what we expect)
+        
+        x_ptsy_pts, x_ptsx_pts, y_ptsy_pts = x_pts*y_pts, x_pts*x_pts, y_pts*y_pts
+
+        X_data = np.array([x_pts, y_pts, x_ptsy_pts, x_ptsx_pts, y_ptsy_pts]).T  # X_data shape: n, 5
+        Y_data = z_pts
+
+        reg = linear_model.LinearRegression().fit(X_data, Y_data)
+
+        print("coefficients of equation of plane, (a1, a2, a3, a4, a5): ", reg.coef_)
+
+        print("value of intercept, c:", reg.intercept_)
+        
+        array_leveled2 = array - reg.coef_[0]*grid[0] -  reg.coef_[1]*grid[1] - reg.coef_[2]*grid[0]*grid[1] - reg.coef_[3]*grid[0]*grid[0]- reg.coef_[3]*grid[1]*grid[1] - reg.intercept_
+        plt.imshow(array_leveled2)
+        plt.show()
+        
+        print(np.mean(array_leveled2), np.var(array_leveled2[labels==largest_area_label]) , np.mean(array_leveled), np.var(array_leveled[labels==largest_area_label]) )
+        '''
+     
+        return array_leveled
 
 
 class Predictor(object):
@@ -193,7 +268,7 @@ class Predictor(object):
         self.num_classes = num_classes
         self.num_labels = num_labels
         self.max_area = max_area
-        
+        ic(self.scan.scan_fwd.shape)
         self.UNet = mo.UNet()
         cwd = Path.cwd()
         if scan.surface == 'Si':
@@ -723,17 +798,16 @@ class Predictor(object):
         # make an array of coordinates. Array should be of the form:
         # [[idx],[x],[y],[n]] where idx is its index from connected component
         # analysis, x and y its coordinates, and n its label.
+        # first do support set
         coords_array = self.support_set['coords']
         labels_array = np.expand_dims(self.support_set['target'],axis=-1)
         idxs_array = np.expand_dims(self.support_set['idxs'],axis=-1)
-        ic(idxs_array.shape, coords_array.shape, labels_array.shape)
         csv_array = np.concatenate((idxs_array, coords_array, labels_array), axis = 1)
-        ic(csv_array.shape)
+        # now do query set
         for defect in self.query_set.values():
             coords = np.expand_dims(defect['coord'],axis=0)
             label = np.array( [[defect['target']]])
             idx = np.array([[defect['idx']]])
-            ic(idx.shape, coords.shape, label.shape)
             array = np.concatenate((idx, coords, label), axis = 1)
             csv_array = np.concatenate((csv_array,array), axis=0)
         
@@ -744,12 +818,14 @@ class Predictor(object):
 
 if __name__ == "__main__":
     cwd = Path.cwd()
-    file_path = Path.joinpath(cwd, 'example_arrays', 'm70.npy')
+   # file_path = Path.joinpath(cwd, 'example_arrays', 'm70.npy')
    # file_path = Path.joinpath(cwd, 'example_arrays', 'm235.npy')
-    example_array = np.load(file_path)
-    example_scan = FSL_Scan('m235','TiO2', example_array, size=10)
+    file_path = Path.joinpath(cwd, 'example_arrays', 'm63_ori_1.png')
+   # example_array = np.load(file_path)
+    example_array = plt.imread(file_path)
+    example_scan = FSL_Scan('m63','TiO2', example_array, size=20)
     example_pred = Predictor(example_scan, num_classes=2, num_labels=1, max_area=70000)
     example_pred.label_support_set()
     example_pred.predict()
-    example_pred.display_image_with_mask('full')
+    example_pred.display_image_with_mask('full', alpha=0.6)
     example_pred.save_coords_to_csv()
