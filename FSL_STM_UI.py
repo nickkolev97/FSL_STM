@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import patchify as pat
 import cv2
 from matplotlib import pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 import FSL_model as mo
 from pathlib import Path
 
@@ -57,7 +59,7 @@ class FSL_Scan(object):
         self.name = name
         self.surface = surface
         self.scan_fwd = scan_fwd
-        if scan_bwd == None:
+        if scan_bwd is None:
             self.scan_bwd = scan_fwd
             self.scan_fwd_repeated = True
         else:
@@ -69,8 +71,9 @@ class FSL_Scan(object):
 
     def _resample(self):
         """
-        If array is not of size (2^n, 2^n), n>5, then we want to resample it so that it is.
-        This is just due to the way the segmentation algorithm works.
+        If array does not have the same nm to pixel ratio that the,
+        training data had, then we want to resample it so that it does.
+        This is to increase accuracy
         Args:
             self
 
@@ -79,24 +82,27 @@ class FSL_Scan(object):
         # find new resolution. This depends on what surface it is.
         if self.surface == 'Si':
             # 100nm to 512pixels
+            new_res = int(self.size*(512/100))
+        if self.surface == 'Ge':
+            # 50nm to 512pixels
+            new_res = int(self.size*(512/50))
+        if self.surface == 'TiO2':
+            # 10nm to 512pixels
+            new_res = int(self.size*(512/10))
+        if new_res!=self.res0:
+            # turn numpy array to torch tensor for resampling
+            fwd_tens = torch.tensor(self.scan_fwd)
+            fwd_tens = F.interpolate(fwd_tens.unsqueeze(0).unsqueeze(0), size=(new_res, new_res), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+            fwd_array = fwd_tens.detach().numpy()
+            if self.scan_fwd_repeated==True:
+                bwd_array = fwd_array.copy()
+            else:
+                bwd_tens = torch.tensor(self.scan_bwd)
+                bwd_tens = F.interpolate(bwd_tens.unsqueeze(0).unsqueeze(0), size=(new_res, new_res), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                bwd_array = bwd_tens.detach().numpy()
             
-        
-        new_res = resolutions[np.argmin(np.array(resolutions)-self.res0)]
-        # turn numpy array to torch tensor for resampling
-        fwd_tens = torch.tensor(self.scan_fwd)
-       # fwd_tens = F.interpolate(fwd_tens, size=(new_res, new_res), mode='bilinear', align_corners=False)
-        fwd_tens = F.interpolate(fwd_tens.unsqueeze(0).unsqueeze(0), size=(1024, 1024), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-        fwd_array = fwd_tens.detach().numpy()
-        if self.scan_fwd_repeated==True:
-            bwd_array = fwd_array.copy()
-        else:
-            bwd_tens = torch.tensor(self.scan_bwd)
-            bwd_tens = F.interpolate(bwd_tens, size=(new_res, new_res), mode='bilinear', align_corners=False)
-            bwd_array = bwd_tens.detach().numpy()
-        
-        self.scan_fwd = fwd_array
-        self.scan_bwd = bwd_array
-
+            self.scan_fwd = fwd_array
+            self.scan_bwd = bwd_array
         return
         
     def plane_level(self):
@@ -231,10 +237,10 @@ class Predictor(object):
                                             'idxs': numpy array of idx of each support crop, idx being from the 
                                                 connected component analysis. shape = (num crops, 1) }
     - self.query_set: a dictionary with the query set. It's of the form:
-                      self.query_set = {idx: {'target': n, 'image': torch.tensor, 'coord': (x,y), 'idx':idx} }
+                      self.query_set = {idx: {'target': n, 'image': torch.tensor, 'coords': (x,y), 'idx':idx} }
     - self.anom_set: dictionary of anomalies. Keys are integer labels (that come from the connected components
                      analysis) and values are info about defect such as pixel coordinates. It's of the form:
-                     anom_set = {defect_idx: {'target': label, 'image': None, 'coord': self.defect_coords[defect_idx], 'idx': defect_idx}}
+                     anom_set = {defect_idx: {'target': label, 'image': None, 'coords': self.defect_coords[defect_idx], 'idx': defect_idx}}
     - self.large_defect_coords: dictionary of defects that are too large and their coords. Keys are integer 
                                 labels (that come from the connected components analysis) and values are 
                                 their pixel coords.Default for this is 20 pixels**2.
@@ -263,31 +269,37 @@ class Predictor(object):
     
     '''  
 
-    def __init__(self, scan, num_classes, num_labels, max_area = 20):
+    def __init__(self, scan, num_classes, num_labels, max_area = 6000):
         self.scan = scan
         self.num_classes = num_classes
         self.num_labels = num_labels
         self.max_area = max_area
-        ic(self.scan.scan_fwd.shape)
         self.UNet = mo.UNet()
         cwd = Path.cwd()
         if scan.surface == 'Si':
-            UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Si.pth')
+            UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Si_bright.pth')
+#            UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Si_bright.pth')
             self.UNet = self._load_model(self.UNet, UNet_file_path)
-            self.win_size = 32
+            self.win_size = 256 # size of window for UNet
+            self.crop_size = 11 # size of crop for FSL classifier
         elif scan.surface == 'Ge':
             UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Ge.pth')
             self.UNet = self._load_model(self.UNet, UNet_file_path)
-            self.win_size = 32
+            self.win_size = 64 
+            self.crop_size = 22
         elif scan.surface == 'TiO2':
             UNet_file_path = Path.joinpath(cwd,'models', 'UNet_TiO2.pth')
             self.UNet = self._load_model(self.UNet, UNet_file_path)
             self.win_size = 128
-        
+            self.crop_size = 58
+    
         self.UNet.eval()
 
-        fsl_file_path = Path.joinpath(cwd,'models', 'FSL_protonet_(3,15)_40pix_SiGe_inv.pth')        
+       # fsl_file_path = Path.joinpath(cwd,'models', 'FSL_protonet_(3,15)_40pix_SiGe_inv.pth')     
+        fsl_file_path = Path.joinpath(cwd,'models', 'FSL_protonet_(3,15)_40pix_(Si,TiO2)_inv.pth')           
         self.fsl_model = mo.PrototypicalNetwork()
+        # don't need the lightning module! I just didn't save the bare network after training so need to 
+        # do this atm.
         self.fsl_lightning_model = mo.FewShotLearner(self.fsl_model, n_way=num_classes)
         self.fsl_lightning_model = self._load_model(self.fsl_lightning_model, fsl_file_path)
         self.fsl_lightning_model.eval()
@@ -340,7 +352,7 @@ class Predictor(object):
         Returns:
             array: normalised array.
         """
-        # find maximums and minimums
+        # find means
         mean0 = np.mean(array[0,:,:])
         mean1 = np.mean(array[0,:,:])
         
@@ -363,6 +375,32 @@ class Predictor(object):
         
         array = self.scan.scan_fwd.copy()
         res = array.shape[0]
+
+        '''
+        self.win_size = 256
+        win_size2 = self.win_size//2
+        sqrt_num_patches = ((res-self.win_size)//(self.win_size//2)+1)
+
+        # cut up the array into patches of size win_size
+        patches = np.reshape( pat.patchify(array, (self.win_size, self.win_size), step = self.win_size//2), ( ( sqrt_num_patches**2 , 1, self.win_size,self.win_size) ) )
+        # normalise and turn to torch tensor
+        patches = self.maxminnorm(torch.tensor(patches).float())
+
+        # find defects
+        torch.manual_seed(0) # need to seed or conv layers aren't deterministic
+        unet_prediction = self.UNet(patches)
+        unet_prediction = torch.reshape(unet_prediction, (sqrt_num_patches, sqrt_num_patches, 2, 1, self.win_size, self.win_size))
+        prediction = torch.zeros((2,res,res))
+        # To get rid of edge effects of the U-Net, we take smaller steps so each crop overlaps and then take an average over the crops
+        # takes a bit longer to compute but is more accurate
+        for i in range(sqrt_num_patches):
+            for j in range(sqrt_num_patches):
+                prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] = prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] + unet_prediction[i,j,:,0,:,:]     
+        plt.title('window size = {}'.format(self.win_size))
+        plt.imshow(torch.argmax(prediction, dim=0))
+        plt.show()
+        '''
+
         win_size2 = self.win_size//2
         sqrt_num_patches = ((res-self.win_size)//(self.win_size//2)+1)
 
@@ -382,8 +420,63 @@ class Predictor(object):
             for j in range(sqrt_num_patches):
                 prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] = prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] + unet_prediction[i,j,:,0,:,:]     
 
-        defect_mask = torch.argmax(prediction,dim=0)
-        
+        defect_mask = torch.argmax(prediction, dim=0)
+
+        fig, ax = plt.subplots(1, 2)
+        ax[0].imshow(self.scan.scan_fwd, cmap='afmhot')
+        ax[1].imshow(defect_mask)
+        plt.show()
+        '''
+
+        self.win_size = 64
+        win_size2 = self.win_size//2
+        sqrt_num_patches = ((res-self.win_size)//(self.win_size//2)+1)
+
+        # cut up the array into patches of size win_size
+        patches = np.reshape( pat.patchify(array, (self.win_size, self.win_size), step = self.win_size//2), ( ( sqrt_num_patches**2 , 1, self.win_size,self.win_size) ) )
+        # normalise and turn to torch tensor
+        patches = self.maxminnorm(torch.tensor(patches).float())
+
+        # find defects
+        torch.manual_seed(0) # need to seed or conv layers aren't deterministic
+        unet_prediction = self.UNet(patches)
+        unet_prediction = torch.reshape(unet_prediction, (sqrt_num_patches, sqrt_num_patches, 2, 1, self.win_size, self.win_size))
+        prediction = torch.zeros((2,res,res))
+        # To get rid of edge effects of the U-Net, we take smaller steps so each crop overlaps and then take an average over the crops
+        # takes a bit longer to compute but is more accurate
+        for i in range(sqrt_num_patches):
+            for j in range(sqrt_num_patches):
+                prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] = prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] + unet_prediction[i,j,:,0,:,:]     
+        plt.title('window size = {}'.format(self.win_size))
+        plt.imshow(torch.argmax(prediction, dim=0))
+        plt.show()
+
+        self.win_size = 32
+        win_size2 = self.win_size//2
+        sqrt_num_patches = ((res-self.win_size)//(self.win_size//2)+1)
+
+        # cut up the array into patches of size win_size
+        patches = np.reshape( pat.patchify(array, (self.win_size, self.win_size), step = self.win_size//2), ( ( sqrt_num_patches**2 , 1, self.win_size,self.win_size) ) )
+        # normalise and turn to torch tensor
+        patches = self.maxminnorm(torch.tensor(patches).float())
+
+        # find defects
+        torch.manual_seed(0) # need to seed or conv layers aren't deterministic
+        unet_prediction = self.UNet(patches)
+        unet_prediction = torch.reshape(unet_prediction, (sqrt_num_patches, sqrt_num_patches, 2, 1, self.win_size, self.win_size))
+        prediction = torch.zeros((2,res,res))
+        # To get rid of edge effects of the U-Net, we take smaller steps so each crop overlaps and then take an average over the crops
+        # takes a bit longer to compute but is more accurate
+        for i in range(sqrt_num_patches):
+            for j in range(sqrt_num_patches):
+                prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] = prediction[:,i*win_size2:(i*win_size2)+self.win_size, j*win_size2:(j*win_size2)+self.win_size] + unet_prediction[i,j,:,0,:,:]     
+        plt.title('window size = {}'.format(self.win_size))
+        plt.imshow(torch.argmax(prediction, dim=0))
+        plt.show()
+
+        '''
+
+
         # get pixel coordinates of all defects
         connected_comps = cv2.connectedComponentsWithStats(defect_mask.detach().numpy().astype(np.uint8))
         (numLabels, self.labels, stats, centroids) = connected_comps
@@ -432,18 +525,40 @@ class Predictor(object):
         # NOTE/ TODO: I think it'd be better if there were squares around features rather than the
         #             defect mask overlaid. Should change this later.
 
-        if transparency==0.5:
-            raise Exception('transparency cannot be equal to 0.5')
-
         # display scan with mask overlaid
-        plt.imshow(self.scan.scan_fwd, cmap='afmhot')
-        plt.imshow(self.defect_mask, alpha=transparency, interpolation='none', cmap='tab20')
-        # save figure
-        plt.savefig('outputs\{}_defect_mask.png'.format(self.scan.name), transparent=True, pad_inches=0)
-        plt.clf() #clear current figure
-        # load in CV
-        image = cv2.imread('outputs\{}_defect_mask.png'.format(self.scan.name))
+        fig = Figure(figsize=(1,1), dpi = self.scan.scan_fwd.shape[0])
+        canvas = FigureCanvasAgg(fig)
+
+        ax = fig.add_subplot(111)
+        ax.imshow(self.scan.scan_fwd, cmap='afmhot')
+        ax.imshow(self.defect_mask, alpha=transparency, interpolation='none', cmap='tab20')
         
+        ax.axis('off')
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+
+                
+        fig.tight_layout(pad=0)
+
+        # To remove the huge white borders
+        ax.margins(0)
+        
+        # Retrieve a view on the renderer buffer
+        canvas.draw()
+        buf = canvas.buffer_rgba()
+        # convert to a NumPy array
+        image = np.asarray(buf)
+
+        # save figure
+        #fig.savefig('outputs\{}_defect_mask.png'.format(self.scan.name), transparent=True, bbox_inches='tight', pad_inches=0.0)
+        #fig.close() # close current figure
+        # load in CV
+       # img = plt.imread('outputs\{}_defect_mask.png'.format(self.scan.name))
+       # ic(img.shape, type(img))
+       # image = cv2.imread('outputs\{}_defect_mask.png'.format(self.scan.name))
+        ic(image.shape)
         imax = np.max(image)
         imin = np.min(image)
         if imax!=255 or imin!=0:
@@ -467,7 +582,7 @@ class Predictor(object):
 
         return list_of_coords
     
-    def label_support_set(self, transparency = 0.7):
+    def label_support_set(self, transparency = 0.5):
         """
         Opens up an openCV window with the segmented mask of the defects overlaid.
         Ask user to give labels for the query set.
@@ -491,7 +606,7 @@ class Predictor(object):
                                             'idx': numpy array of idx of each support crop, idx being from the 
                                                 connected component analysis. shape = (num crops, 1) }
             query_set: dictionary with the query set. It's of the form:
-                       self.query_set = {idx: {'label': n, 'image': torch.tensor, 'coord': (x,y), 'idx':idx} }
+                       self.query_set = {idx: {'label': n, 'image': torch.tensor, 'coords': (x,y), 'idx':idx} }
         """
         list_of_coords = self._label(transparency)
 
@@ -510,7 +625,6 @@ class Predictor(object):
         defect_coords = list(self.defect_coords.values())
         defect_coords_array = np.array(list(self.defect_coords.values()))
         defect_coord_idx = list(self.defect_coords.keys())
-        
         for coord in list_of_coords:
             dists = np.sqrt( np.sum((coord-defect_coords_array)**2, axis = 1) )
             # find the index of the nearest defect to the label. This index is w.r.t
@@ -524,12 +638,13 @@ class Predictor(object):
             # figured out by finding which number label (target) it is.
             label = list_of_coords.index(coord)//self.num_labels
             image = self._get_image(self.defect_coords[defect_idx], scan, pad_size)
-            self.support_set[defect_idx] = {'target': label, 'image': image, 'coord': self.defect_coords[defect_idx], 'idx': defect_idx}
+            plt.imshow(image[0,:,:], cmap='afmhot')
+            plt.show()
+            self.support_set[defect_idx] = {'target': label, 'image': image, 'coords': self.defect_coords[defect_idx], 'idx': defect_idx}
             support_set_coords.append(self.defect_coords[defect_idx])
 
         # update the structure of the dictionary so it can be used for predictions.
         self.support_set = self._update_structure(self.support_set)
-
         # Now find the query set dict which is just the leftover defects.
         # Use set operations for this.
         # Convert the arrays to tuples for set operations.
@@ -550,7 +665,7 @@ class Predictor(object):
             idx = indices[np.where(np.sum(defect_coords_array==coord,axis=1)==2)[0][0]]
             image = self._get_image(coord, scan, pad_size).unsqueeze(0)
             # add to query set. 'target' is None still as it hasn't been predicted
-            self.query_set[idx] = {'target': None, 'image': image, 'coord': coord, 'idx': idx}
+            self.query_set[idx] = {'target': None, 'image': image, 'coords': coord, 'idx': idx}
 
         return
     
@@ -560,6 +675,7 @@ class Predictor(object):
         Allows user to select anomalies they want to disregard.
         This is useful if there's only one or two of them so not enough to make up a class of
         their own.
+        NOTE: this should be used after labelling the support set!
 
         Args:
             self
@@ -591,7 +707,8 @@ class Predictor(object):
             # since these are all anomalies, their label is num_classes
             label = self.num_classes
             # don't need image as it won't be getting classified by FSL.
-            self.anom_set[defect_idx] = {'target': label, 'image': None, 'coord': self.defect_coords[defect_idx], 'idx': defect_idx}
+            self.anom_set[defect_idx] = {'target': label, 'image': None, 'coords': self.defect_coords[defect_idx], 'idx': defect_idx}
+            del self.query_set[defect_idx]
             
 
         return None
@@ -658,21 +775,17 @@ class Predictor(object):
             crop: crop of the defect with 2 channels.
         """    
 
-        # TODO: crop size should change depending on size of defect (with some minimum and maximum probably),
-        # rather than due to surface, with some possible input from user? For now, just use automatic based on surface.
-        if self.scan.surface == 'Si':
-            crop_size = 11
-        if self.scan.surface == 'Ge':
-            crop_size = 11
-        if self.scan.surface == 'TiO2':
-            crop_size = 58
-        hcs = int(round(crop_size/2,0)) # half crop size
+        hcs = int(round(self.crop_size/2,0)) # half crop size
         x, y = coord.astype(np.uint16) + pad_width #should this be swapped?
         crop = np.transpose(scan[y-hcs:y+hcs-1, x-hcs:x+hcs-1,:], (2,0,1)).copy()
         # normalise (mean to 0)
         crop = self.mean0norm(crop)
         # turn to torch.tensor
         crop = torch.tensor(crop).float() 
+        # resample to (40,40) since that's what we used in training and testing
+        new_res = 40
+        crop = F.interpolate(crop.unsqueeze(0), size=(new_res, new_res), mode='bilinear', align_corners=False).squeeze(0)
+
 
         return crop
 
@@ -690,7 +803,6 @@ class Predictor(object):
 
                           
         """
-
         for defect in self.query_set.values():
             defect['target'] = int(torch.argmax(self.fsl_model(defect, self.support_set)))
 
@@ -725,7 +837,7 @@ class Predictor(object):
     def _update_structure(self, d):
         """
         Turns self.support_set dictionary from 
-        self.support_set = {integer: {'target': n, 'image': numpy array, 'coord': (x,y), 'idx': idx} }
+        self.support_set = {integer: {'target': n, 'image': numpy array, 'coords': (x,y), 'idx': idx} }
         structure to 
         self.support_set = {'image': numpy array of shape (number of crops, num_channels, res, res), 
                             'target': numpy array of shape (number of crops, y_values for this episode),
@@ -748,7 +860,7 @@ class Predictor(object):
         for item in list_of_dicts:
             images.append(item['image'])
             targets.append(item['target'])
-            coords.append(item['coord'])
+            coords.append(item['coords'])
             idxs.append(item['idx'])
                 
         images = torch.stack(images, dim=0)
@@ -758,7 +870,7 @@ class Predictor(object):
           
         return {'image': images, 'target':targets, 'coords': coords, 'idxs': idxs, 'classlist': [i for i in range(self.num_classes)]}
 
-    def display_image_with_mask(self, mask, alpha=0.5):
+    def display_image_with_mask(self, mask, display_bwds = False, alpha=0.5, colormap='Dark2'):
         """
         Displays the forward scan with either the defect or fully segmented mask.
         Args:
@@ -766,6 +878,7 @@ class Predictor(object):
             mask: 'defect' or 'full' tell you whether to use the fully segmented
                   or defect mask.
             alpha: controls transparency of mask.
+            colormap: Matplotlib colormap to use for segmentation
         Returns:
             None
         """
@@ -777,11 +890,19 @@ class Predictor(object):
             raise Exception('mask must be one of "defect" or "full"')
 
         # display scan with mask overlaid
-        fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(self.scan.scan_fwd, cmap='afmhot')
-        ax[0].imshow(mask_, alpha=alpha, interpolation='none', cmap='tab20')
+
+        if display_bwds == False:
+            fig, ax = plt.subplots(1, 2)
+        else:
+            fig, ax = plt.subplots(1, 3)
+        im = ax[0].imshow(self.scan.scan_fwd, cmap='afmhot')
+        im = ax[0].imshow(mask_, alpha=alpha, interpolation='none', cmap=colormap)
+        cbar = plt.colorbar(im, ax=ax[0], orientation='vertical')
         ax[1].imshow(self.scan.scan_fwd, cmap='afmhot')
+        if display_bwds == True:
+            ax[2].imshow(self.scan.scan_bwd,cmap='afmhot')
         plt.show()
+        plt.savefig('{}_fully_segmented.png'.format(self.scan.name))
 
         return 
 
@@ -805,7 +926,7 @@ class Predictor(object):
         csv_array = np.concatenate((idxs_array, coords_array, labels_array), axis = 1)
         # now do query set
         for defect in self.query_set.values():
-            coords = np.expand_dims(defect['coord'],axis=0)
+            coords = np.expand_dims(defect['coords'],axis=0)
             label = np.array( [[defect['target']]])
             idx = np.array([[defect['idx']]])
             array = np.concatenate((idx, coords, label), axis = 1)
@@ -814,18 +935,101 @@ class Predictor(object):
         np.savetxt("outputs\{}_coords_and_labels.csv".format(self.scan.name), csv_array, delimiter=",")
 
         return
+    
+    def save_to_GDS(self, labels='all'):
+        """
+        Saves the segmented scan as a GDS file. 
+        Args:
+            self
+            labels: a list with which labels you'd like to save to the GDS (as integers from 0 to num_classes-1)
+        Returns:
+            None
+        """
+
+        if labels == 'all':
+            labels = [i for i in range(self.num_classes)]
 
 
 if __name__ == "__main__":
     cwd = Path.cwd()
+    
+    ############################
+    # example TiO2 arrays
    # file_path = Path.joinpath(cwd, 'example_arrays', 'm70.npy')
    # file_path = Path.joinpath(cwd, 'example_arrays', 'm235.npy')
-    file_path = Path.joinpath(cwd, 'example_arrays', 'm63_ori_1.png')
+   # file_path = Path.joinpath(cwd, 'example_arrays', 'm63_ori_1.png')
    # example_array = np.load(file_path)
-    example_array = plt.imread(file_path)
-    example_scan = FSL_Scan('m63','TiO2', example_array, size=20)
-    example_pred = Predictor(example_scan, num_classes=2, num_labels=1, max_area=70000)
-    example_pred.label_support_set()
+   # example_array = plt.imread(file_path)
+
+
+   #############################
+    # example Si(001) arrays
+   # file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20230727-132609_Paddington-Si(001)-H_PH3-STM_AtomManipulation--31_1_0.npy')
+   # file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20230727-132609_Paddington-Si(001)-H_PH3-STM_AtomManipulation--31_1_1.npy')
+   # example_array_fwd = np.load(file_path_fwd)[246:502,256:]
+   # example_array_bwd = np.load(file_path_bwd)[246:502,256:]
+
+   # example_array_fwd = np.load(r'C:\Users\nkolev\OneDrive - University College London\Documents\image processing\AsH3 identification\undosed\numpy array\20191122-195611_Chancery Lane-Si(001)H--24_6_0.npy')
+   # example_array_bwd = np.load(r'C:\Users\nkolev\OneDrive - University College London\Documents\image processing\AsH3 identification\undosed\numpy array\20191122-195611_Chancery Lane-Si(001)H--24_6_1_cor.npy')
+    
+   # file_path = Path.joinpath(cwd, 'example_arrays', '20231027-095207_Neasden Si(001)-H--STM_AtomManipulation--9_2_0.npy')
+   # file_path = Path.joinpath(cwd, 'example_arrays', '20221213-141130_Brockley-Si(001)H-STM_AtomManipulation--23_2_0.npy')
+   # example_array = np.load(file_path)   
+    
+    #########
+    # Earl's court Si(001)-H+AsH3    
+    # undosed
+   # file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_0.npy')
+   # file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_1.npy')
+   # example_array_fwd = np.load(file_path_fwd)[72:1096,410:1433]
+   # example_array_bwd = np.load(file_path_bwd)[72:1096,410:1433]
+    # dosed
+    file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_0.npy')
+    file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_1.npy')
+    example_array_fwd = np.load(file_path_fwd)[::-1,:].copy()
+    example_array_bwd = np.load(file_path_bwd)[::-1,:].copy()
+    # incorporated
+    #file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--44_1_0.npy')
+    #file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--44_1_1.npy')
+    #example_array_fwd = np.load(file_path_fwd)
+    #example_array_bwd = np.load(file_path_bwd)
+
+
+    ############################
+    # example Ge(001) arrays
+   # file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
+   # file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
+   # example_array_fwd = np.load(file_path_fwd)   
+   # example_array_bwd = np.load(file_path_bwd)
+
+
+    # create FSL_Scan object
+   
+    # TiO2
+   # example_scan = FSL_Scan('m235','TiO2', example_array, size=10) 
+   # example_scan = FSL_Scan('m63','TiO2', example_array, size=20) 
+   
+   # Si(001)
+   # example_scan = FSL_Scan('20230727_paddington_31_1','Si', example_array_fwd, scan_bwd = example_array_bwd, size=50) #Si(001)-H+PH3
+   # example_scan = FSL_Scan('20231027-095207_Neasden Si(001)-H--STM_AtomManipulation--9_2_0_','Si', example_array, size=100) 
+   # example_scan = FSL_Scan('20221213-141130_Brockley-Si(001)H-STM_AtomManipulation--23_2_0_','Si', example_array, size=100) 
+   # example_scan = FSL_Scan('20191122-195611_Chancery Lane-Si(001)H--24_6_0_','Si', example_array_fwd, example_array_bwd, size=100) 
+   # Earl's court Si(001)-H+AsH3
+    example_scan = FSL_Scan("Earl's court - undosed",'Si', example_array_fwd, example_array_bwd, size=100) # dosed
+   # example_scan = FSL_Scan("Earl's courst - dosed",'Si', example_array_fwd, example_array_bwd, size=100) # undosed
+   # example_scan = FSL_Scan("Earl's court - incorporated",'Si', example_array_fwd, example_array_bwd, size=100) # incorporate
+
+
+   # Ge(001)
+   # example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
+   
+    example_scan.plane_level()
+
+    example_pred = Predictor(example_scan, num_classes=4, num_labels=2)
+    np.save('{}_mask.npy'.format(example_pred.scan.name), example_pred.defect_mask )
+    example_pred.label_support_set(transparency=0.5)
+    example_pred.label_anomalies()
     example_pred.predict()
-    example_pred.display_image_with_mask('full', alpha=0.6)
+   # example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.8)
+    example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.8)
     example_pred.save_coords_to_csv()
