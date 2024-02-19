@@ -22,7 +22,6 @@ def save_model(model, path):
 #############################
 
 # test accuracy function
-# test accuracy function
 def testAccuracy(model, dataloader, device):
     
     model.eval()
@@ -47,15 +46,10 @@ def testAccuracy(model, dataloader, device):
     return(accuracy)
 
 def train(model, dataloader_train, dataloader_test, loss_, num_epochs, path, device, optimizer):
-    # define lists to store accuracy gain as we train
-    train_acc_gain = []
-    test_acc_gain = []
-    
     best_accuracy = 0
     best_loss = float('inf')
 
     model = model.to(torch.float)
-    model.train()
     # Iterate over the training data
     for epoch in range(num_epochs):
         running_train_loss = 0.0
