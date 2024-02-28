@@ -984,10 +984,10 @@ if __name__ == "__main__":
    # example_array_fwd = np.load(file_path_fwd)[72:1096,410:1433]
    # example_array_bwd = np.load(file_path_bwd)[72:1096,410:1433]
     # dosed
-    file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_0.npy')
-    file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_1.npy')
-    example_array_fwd = np.load(file_path_fwd)[::-1,:].copy()
-    example_array_bwd = np.load(file_path_bwd)[::-1,:].copy()
+   # file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_0.npy')
+   # file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_1.npy')
+   # example_array_fwd = np.load(file_path_fwd)[::-1,:].copy()
+   # example_array_bwd = np.load(file_path_bwd)[::-1,:].copy()
     # incorporated
     #file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--44_1_0.npy')
     #file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--44_1_1.npy')
@@ -997,10 +997,10 @@ if __name__ == "__main__":
 
     ############################
     # example Ge(001) arrays
-   # file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
-   # file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
-   # example_array_fwd = np.load(file_path_fwd)   
-   # example_array_bwd = np.load(file_path_bwd)
+    file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
+    file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
+    example_array_fwd = np.load(file_path_fwd)   
+    example_array_bwd = np.load(file_path_bwd)
 
 
     # create FSL_Scan object
@@ -1015,13 +1015,13 @@ if __name__ == "__main__":
    # example_scan = FSL_Scan('20221213-141130_Brockley-Si(001)H-STM_AtomManipulation--23_2_0_','Si', example_array, size=100) 
    # example_scan = FSL_Scan('20191122-195611_Chancery Lane-Si(001)H--24_6_0_','Si', example_array_fwd, example_array_bwd, size=100) 
    # Earl's court Si(001)-H+AsH3
-    example_scan = FSL_Scan("Earl's court - undosed",'Si', example_array_fwd, example_array_bwd, size=100) # dosed
+   # example_scan = FSL_Scan("Earl's court - undosed",'Si', example_array_fwd, example_array_bwd, size=100) # dosed
    # example_scan = FSL_Scan("Earl's courst - dosed",'Si', example_array_fwd, example_array_bwd, size=100) # undosed
    # example_scan = FSL_Scan("Earl's court - incorporated",'Si', example_array_fwd, example_array_bwd, size=100) # incorporate
 
 
    # Ge(001)
-   # example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
+    example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
    
     example_scan.plane_level()
 
