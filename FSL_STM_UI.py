@@ -236,7 +236,7 @@ class Predictor(object):
                                             'coords': numpy array of shape (number of crops, 2),
                                             'idxs': numpy array of idx of each support crop, idx being from the 
                                                 connected component analysis. shape = (num crops, 1) }
-    - self.query_set: a dictionary with the query set. It's of the form:
+    - self.query_set: a dictionary within a dictionary with the query set. It's of the form:
                       self.query_set = {idx: {'target': n, 'image': torch.tensor, 'coords': (x,y), 'idx':idx} }
     - self.anom_set: dictionary of anomalies. Keys are integer labels (that come from the connected components
                      analysis) and values are info about defect such as pixel coordinates. It's of the form:
@@ -638,8 +638,8 @@ class Predictor(object):
             # figured out by finding which number label (target) it is.
             label = list_of_coords.index(coord)//self.num_labels
             image = self._get_image(self.defect_coords[defect_idx], scan, pad_size)
-            plt.imshow(image[0,:,:], cmap='afmhot')
-            plt.show()
+            #plt.imshow(image[0,:,:], cmap='afmhot')
+            #plt.show()
             self.support_set[defect_idx] = {'target': label, 'image': image, 'coords': self.defect_coords[defect_idx], 'idx': defect_idx}
             support_set_coords.append(self.defect_coords[defect_idx])
 
@@ -834,6 +834,30 @@ class Predictor(object):
       
         return
 
+    def defect_numbers(self):
+        """
+        Returns the number of defects in each class in the scan.
+        Args:
+            self
+        Returns:
+            defect_number: dictionary with number of defects in each class.
+        """
+        # initialise dictionary with keys from 0 to num_classes, and values of 0
+        defect_number = {i: 0 for i in range(self.num_classes+1)}
+        print(defect_number)
+        # count the number of defects in each class
+        for defect in self.query_set.values():
+            defect_number[defect['target']] += 1
+        for i in range(self.num_classes): 
+            defect_number[i] += np.sum(self.support_set['target']== i)
+        # add the number of anomalies
+        defect_number[self.num_classes] = len(self.anom_set)
+
+        return defect_number
+
+
+      
+
     def _update_structure(self, d):
         """
         Turns self.support_set dictionary from 
@@ -957,9 +981,9 @@ if __name__ == "__main__":
     # example TiO2 arrays
    # file_path = Path.joinpath(cwd, 'example_arrays', 'm70.npy')
    # file_path = Path.joinpath(cwd, 'example_arrays', 'm235.npy')
-   # file_path = Path.joinpath(cwd, 'example_arrays', 'm63_ori_1.png')
+    file_path = Path.joinpath(cwd, 'example_arrays', 'm63_ori_1.png')
    # example_array = np.load(file_path)
-   # example_array = plt.imread(file_path)
+    example_array = plt.imread(file_path)
 
 
    #############################
@@ -997,17 +1021,17 @@ if __name__ == "__main__":
 
     ############################
     # example Ge(001) arrays
-    file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
-    file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
-    example_array_fwd = np.load(file_path_fwd)   
-    example_array_bwd = np.load(file_path_bwd)
+    #file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
+    #file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
+    #example_array_fwd = np.load(file_path_fwd)   
+    #example_array_bwd = np.load(file_path_bwd)
 
 
     # create FSL_Scan object
    
     # TiO2
    # example_scan = FSL_Scan('m235','TiO2', example_array, size=10) 
-   # example_scan = FSL_Scan('m63','TiO2', example_array, size=20) 
+    example_scan = FSL_Scan('m63','TiO2', example_array, size=20) 
    
    # Si(001)
    # example_scan = FSL_Scan('20230727_paddington_31_1','Si', example_array_fwd, scan_bwd = example_array_bwd, size=50) #Si(001)-H+PH3
@@ -1021,15 +1045,16 @@ if __name__ == "__main__":
 
 
    # Ge(001)
-    example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
+   # example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
    
     example_scan.plane_level()
 
-    example_pred = Predictor(example_scan, num_classes=4, num_labels=2)
+    example_pred = Predictor(example_scan, num_classes=3, num_labels=1)
     np.save('{}_mask.npy'.format(example_pred.scan.name), example_pred.defect_mask )
     example_pred.label_support_set(transparency=0.5)
     example_pred.label_anomalies()
     example_pred.predict()
-   # example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.8)
-    example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.8)
+    print(example_pred.defect_numbers()) # print number of defects in each class
+    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.8)
+   # example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.6, colormap='Set1')
     example_pred.save_coords_to_csv()
