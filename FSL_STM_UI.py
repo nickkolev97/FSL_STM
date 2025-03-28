@@ -10,7 +10,8 @@ import FSL_model as mo
 from pathlib import Path
 
 # debugging module
-from icecream import ic
+
+#from icecream import ic
 
 '''
 Contains the user interface for the the FSL.
@@ -32,13 +33,17 @@ class FSL_Scan(object):
     - scan_bwd: if the backward scan is available, input it here, if not, leave this empty.
     - size: only needed if it's a .png file. Real width of scan in nm. 
             Assumes scan is square.
+    - custom_res: if you want to resample the scan to a different resolution than the default
+
 
     Attributes:
     - self.name: name of scan
-    - self.scan : numpy array of the scan.
+    - self.scan_fwd : numpy array of the fwd scan.
+    - self.scan_bwd : numpy array of the bwd scan.
     - self.size: real width of scan in nm. Assumes scan is square.
     - self.scan_fwd_repeated: True/False depending on if we just repeat
                               scan_fwd for scan_bwd. 
+    - self.custom_res: if you want to resample the surface to a custom resolution.
 
     Methods:
     - plane_level: plane levels the scans.
@@ -55,10 +60,14 @@ class FSL_Scan(object):
 
     '''
 
-    def __init__(self, name, surface, scan_fwd, scan_bwd=None, size=None):
+    def __init__(self, name, surface, scan_fwd, scan_bwd=None, size=None, custom_res=False):
         self.name = name
         self.surface = surface
+        if surface != 'Si' and surface != 'Ge' and surface != 'TiO2':
+            raise ValueError('Surface must be one of Si, Ge, or TiO2')
+    
         self.scan_fwd = scan_fwd
+        self.custom_res = custom_res
         if scan_bwd is None:
             self.scan_bwd = scan_fwd
             self.scan_fwd_repeated = True
@@ -66,8 +75,9 @@ class FSL_Scan(object):
             self.scan_bwd = scan_bwd
             self.scan_fwd_repeated = False
         self.size = size
-        self.res0, self.res1 = scan_fwd.shape
+        self.res0, self.res1 = self.scan_fwd.shape
         self._resample()
+        self.res0, self.res1 = self.scan_fwd.shape
 
     def _resample(self):
         """
@@ -89,6 +99,9 @@ class FSL_Scan(object):
         if self.surface == 'TiO2':
             # 10nm to 512pixels
             new_res = int(self.size*(512/10))
+            print('new res', new_res)
+        if self.custom_res:
+            new_res = self.custom_res
         if new_res!=self.res0:
             # turn numpy array to torch tensor for resampling
             fwd_tens = torch.tensor(self.scan_fwd)
@@ -100,9 +113,9 @@ class FSL_Scan(object):
                 bwd_tens = torch.tensor(self.scan_bwd)
                 bwd_tens = F.interpolate(bwd_tens.unsqueeze(0).unsqueeze(0), size=(new_res, new_res), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
                 bwd_array = bwd_tens.detach().numpy()
-            
             self.scan_fwd = fwd_array
             self.scan_bwd = bwd_array
+
         return
         
     def plane_level(self):
@@ -277,21 +290,23 @@ class Predictor(object):
         self.UNet = mo.UNet()
         cwd = Path.cwd()
         if scan.surface == 'Si':
-            UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Si_bright.pth')
+            UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Si.pth')
 #            UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Si_bright.pth')
             self.UNet = self._load_model(self.UNet, UNet_file_path)
-            self.win_size = 256 # size of window for UNet
-            self.crop_size = 11 # size of crop for FSL classifier
+            self.win_size = 64 # size of window for UNet
+            self.crop_size = int(11 * (100/scan.size)*(scan.res0/512)) # size of crop for FSL classifier
+            
         elif scan.surface == 'Ge':
             UNet_file_path = Path.joinpath(cwd,'models', 'UNet_Ge.pth')
             self.UNet = self._load_model(self.UNet, UNet_file_path)
             self.win_size = 64 
-            self.crop_size = 22
+            self.crop_size = int(22 * (50/scan.size)*(scan.res0/512))
         elif scan.surface == 'TiO2':
             UNet_file_path = Path.joinpath(cwd,'models', 'UNet_TiO2.pth')
             self.UNet = self._load_model(self.UNet, UNet_file_path)
             self.win_size = 128
-            self.crop_size = 58
+            self.crop_size = int(58 * (10/scan.size)*(scan.res0/512))
+
     
         self.UNet.eval()
 
@@ -376,6 +391,15 @@ class Predictor(object):
         array = self.scan.scan_fwd.copy()
         res = array.shape[0]
 
+        # if resolution is not 512 per 100nm for Si surface, resample
+        if self.scan.surface == 'Si':
+            if self.scan.size/res != 100/512:
+                new_res = int(self.scan.size*(512/100))
+                array = cv2.resize(array, (new_res, new_res), interpolation = cv2.INTER_LINEAR)
+        
+       # plt.imshow(array)  
+       # plt.show()
+
         '''
         self.win_size = 256
         win_size2 = self.win_size//2
@@ -422,10 +446,10 @@ class Predictor(object):
 
         defect_mask = torch.argmax(prediction, dim=0)
 
-        fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(self.scan.scan_fwd, cmap='afmhot')
-        ax[1].imshow(defect_mask)
-        plt.show()
+       # fig, ax = plt.subplots(1, 2)
+       # ax[0].imshow(self.scan.scan_fwd, cmap='afmhot')
+       # ax[1].imshow(defect_mask)
+       # plt.show()
         '''
 
         self.win_size = 64
@@ -530,7 +554,7 @@ class Predictor(object):
         canvas = FigureCanvasAgg(fig)
 
         ax = fig.add_subplot(111)
-        ax.imshow(self.scan.scan_fwd, cmap='afmhot')
+        ax.imshow(self.scan.scan_fwd, cmap='gray')
         ax.imshow(self.defect_mask, alpha=transparency, interpolation='none', cmap='tab20')
         
         ax.axis('off')
@@ -551,6 +575,9 @@ class Predictor(object):
         # convert to a NumPy array
         image = np.asarray(buf)
 
+        # If still inverted, you can invert the image
+        image = cv2.bitwise_not(image)
+
         # save figure
         #fig.savefig('outputs\{}_defect_mask.png'.format(self.scan.name), transparent=True, bbox_inches='tight', pad_inches=0.0)
         #fig.close() # close current figure
@@ -558,7 +585,7 @@ class Predictor(object):
        # img = plt.imread('outputs\{}_defect_mask.png'.format(self.scan.name))
        # ic(img.shape, type(img))
        # image = cv2.imread('outputs\{}_defect_mask.png'.format(self.scan.name))
-        ic(image.shape)
+        #ic(image.shape)
         imax = np.max(image)
         imin = np.min(image)
         if imax!=255 or imin!=0:
@@ -736,7 +763,7 @@ class Predictor(object):
     
             # displaying the coordinates
             # on the Shell
-            ic(x, y)
+           # ic(x, y)
             list_of_coords.append( [x,y] )
 
             # displaying the coordinates
@@ -752,7 +779,7 @@ class Predictor(object):
         #if event==cv2.EVENT_RBUTTONDOWN:
             # displaying the coordinates
             # on the Shell
-        #    print(x, ' ', y)
+            print(x, ' ', y)
 
         if event==cv2.EVENT_MBUTTONDOWN:
             # use mousewheel to delete the previous click if it was wrong.
@@ -760,32 +787,52 @@ class Predictor(object):
             list_of_coords.remove(previous_coord)
             print( previous_coord, ' deleted' )
 
+
     def _get_image(self, coord, scan, pad_width):
         """
-        Returns a crop of the defect as a torch tensor
-        with mean of 0.
+        Returns a crop of the defect as a torch tensor with mean of 0.
 
         Args:
             self
-            coord: pixel coordinates of the defect.
+            coord: pixel coordinates of the defect
             scan: numpy array of the scan with 2 channels
             pad_width: width of padding added onto scan
 
         Returns:
-            crop: crop of the defect with 2 channels.
+            crop: crop of the defect with 2 channels
         """    
+        hcs = int(round(self.crop_size/2, 0))  # half crop size
+        x, y = coord.astype(np.uint16) + pad_width
+        
+        # Fix the indexing to ensure we get a non-empty crop
+        y_start = max(0, y - hcs)
+        y_end = min(scan.shape[0], y + hcs)
+        x_start = max(0, x - hcs)
+        x_end = min(scan.shape[1], x + hcs)
 
-        hcs = int(round(self.crop_size/2,0)) # half crop size
-        x, y = coord.astype(np.uint16) + pad_width #should this be swapped?
-        crop = np.transpose(scan[y-hcs:y+hcs-1, x-hcs:x+hcs-1,:], (2,0,1)).copy()
-        # normalise (mean to 0)
+        # Get the crop
+        crop = np.transpose(scan[y_start:y_end, x_start:x_end, :], (2, 0, 1)).copy()
+
+        # Check if crop is empty
+        if crop.size == 0:
+            print(f"Warning: Empty crop at coordinates ({x}, {y})")
+            # Create a minimum sized crop filled with zeros
+            crop = np.zeros((2, 1, 1))
+
+        # Normalize (mean to 0)
         crop = self.mean0norm(crop)
-        # turn to torch.tensor
-        crop = torch.tensor(crop).float() 
-        # resample to (40,40) since that's what we used in training and testing
-        new_res = 40
-        crop = F.interpolate(crop.unsqueeze(0), size=(new_res, new_res), mode='bilinear', align_corners=False).squeeze(0)
 
+        # Convert to torch tensor
+        crop = torch.tensor(crop).float()
+
+        # Resample to (40,40)
+        new_res = 40
+        if crop.shape[1] > 0 and crop.shape[2] > 0:
+            crop = F.interpolate(crop.unsqueeze(0), size=(new_res, new_res), 
+                                mode='bilinear', align_corners=False).squeeze(0)
+        else:
+            # Handle the case of empty crops by creating a zero tensor of the right size
+            crop = torch.zeros((2, new_res, new_res))
 
         return crop
 
@@ -828,10 +875,8 @@ class Predictor(object):
 
         # define colour for lattice background
         self.fully_segmented_map[-1,:,:] += (self.labels==0)
-        '''
-        TODO: ADD DISPLAY FOR ANOMALIES AND LARGE DEFECTS (channels -2 and -3)
-        '''
-      
+
+
         return
 
     def defect_numbers(self):
@@ -894,7 +939,7 @@ class Predictor(object):
           
         return {'image': images, 'target':targets, 'coords': coords, 'idxs': idxs, 'classlist': [i for i in range(self.num_classes)]}
 
-    def display_image_with_mask(self, mask, display_bwds = False, alpha=0.5, colormap='Dark2'):
+    def display_image_with_mask(self, mask, display_bwds = False, alpha=0.5, cmap_scan= 'afmhot', cmap_seg='Dark2'):
         """
         Displays the forward scan with either the defect or fully segmented mask.
         Args:
@@ -902,7 +947,8 @@ class Predictor(object):
             mask: 'defect' or 'full' tell you whether to use the fully segmented
                   or defect mask.
             alpha: controls transparency of mask.
-            colormap: Matplotlib colormap to use for segmentation
+            cmap_scan: colormap to use for scan
+            cmap_seg: Matplotlib colormap to use for segmentation
         Returns:
             None
         """
@@ -919,8 +965,8 @@ class Predictor(object):
             fig, ax = plt.subplots(1, 2)
         else:
             fig, ax = plt.subplots(1, 3)
-        im = ax[0].imshow(self.scan.scan_fwd, cmap='afmhot')
-        im = ax[0].imshow(mask_, alpha=alpha, interpolation='none', cmap=colormap)
+        im = ax[0].imshow(self.scan.scan_fwd, cmap=cmap_scan)
+        im = ax[0].imshow(mask_, alpha=alpha, interpolation='none', cmap=cmap_seg)
         cbar = plt.colorbar(im, ax=ax[0], orientation='vertical')
         ax[1].imshow(self.scan.scan_fwd, cmap='afmhot')
         if display_bwds == True:
@@ -981,9 +1027,9 @@ if __name__ == "__main__":
     # example TiO2 arrays
    # file_path = Path.joinpath(cwd, 'example_arrays', 'm70.npy')
    # file_path = Path.joinpath(cwd, 'example_arrays', 'm235.npy')
-    file_path = Path.joinpath(cwd, 'example_arrays', 'm63_ori_1.png')
+   # file_path = Path.joinpath(cwd, 'example_arrays', 'm63_ori_1.png')
    # example_array = np.load(file_path)
-    example_array = plt.imread(file_path)
+   # example_array = plt.imread(file_path)
 
 
    #############################
@@ -1005,8 +1051,8 @@ if __name__ == "__main__":
     # undosed
    # file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_0.npy')
    # file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_1.npy')
-   # example_array_fwd = np.load(file_path_fwd)[72:1096,410:1433]
-   # example_array_bwd = np.load(file_path_bwd)[72:1096,410:1433]
+   # example_array_fwd = np.load(file_path_fwd)[72:1096,410:1434]
+   # example_array_bwd = np.load(file_path_bwd)[72:1096,410:1434]
     # dosed
    # file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_0.npy')
    # file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_1.npy')
@@ -1021,40 +1067,43 @@ if __name__ == "__main__":
 
     ############################
     # example Ge(001) arrays
-    #file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
-    #file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
-    #example_array_fwd = np.load(file_path_fwd)   
-    #example_array_bwd = np.load(file_path_bwd)
+    file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
+    file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
+    example_array_fwd = np.load(file_path_fwd)   
+    example_array_bwd = np.load(file_path_bwd)
 
 
     # create FSL_Scan object
    
     # TiO2
    # example_scan = FSL_Scan('m235','TiO2', example_array, size=10) 
-    example_scan = FSL_Scan('m63','TiO2', example_array, size=20) 
+   # example_scan = FSL_Scan('m63','TiO2', example_array, size=20) 
    
    # Si(001)
    # example_scan = FSL_Scan('20230727_paddington_31_1','Si', example_array_fwd, scan_bwd = example_array_bwd, size=50) #Si(001)-H+PH3
    # example_scan = FSL_Scan('20231027-095207_Neasden Si(001)-H--STM_AtomManipulation--9_2_0_','Si', example_array, size=100) 
-   # example_scan = FSL_Scan('20221213-141130_Brockley-Si(001)H-STM_AtomManipulation--23_2_0_','Si', example_array, size=100) 
+   # example_scan = FSL_Scan('20221213-141130_Brockley-Si(001)H-STM_AtomManipulation--23_2_0_','Si', example_array[], size=100) 
    # example_scan = FSL_Scan('20191122-195611_Chancery Lane-Si(001)H--24_6_0_','Si', example_array_fwd, example_array_bwd, size=100) 
    # Earl's court Si(001)-H+AsH3
-   # example_scan = FSL_Scan("Earl's court - undosed",'Si', example_array_fwd, example_array_bwd, size=100) # dosed
+   # example_scan = FSL_Scan("Earl's court - undosed",'Si', example_array_fwd[512:,:512], example_array_bwd[512:,:512], size=50) # dosed
    # example_scan = FSL_Scan("Earl's courst - dosed",'Si', example_array_fwd, example_array_bwd, size=100) # undosed
    # example_scan = FSL_Scan("Earl's court - incorporated",'Si', example_array_fwd, example_array_bwd, size=100) # incorporate
 
 
    # Ge(001)
-   # example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
+    example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
    
-    example_scan.plane_level()
+    #example_scan.plane_level()
 
-    example_pred = Predictor(example_scan, num_classes=3, num_labels=1)
-    np.save('{}_mask.npy'.format(example_pred.scan.name), example_pred.defect_mask )
-    example_pred.label_support_set(transparency=0.5)
-    example_pred.label_anomalies()
+    example_pred = Predictor(example_scan, num_classes=7, num_labels=1)
+    #np.save('{}_mask.npy'.format(example_pred.scan.name), example_pred.defect_mask )
+
+    plt.imshow(example_scan.scan_fwd,cmap='gray')
+    plt.show()
+    example_pred.label_support_set(transparency=0.4)
+    example_pred.label_anomalies(transparency=0.4)
     example_pred.predict()
     print(example_pred.defect_numbers()) # print number of defects in each class
-    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.8)
-   # example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.6, colormap='Set1')
+    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg='Set1')
+    #example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.55, cmap_scan='gray', cmap_seg='Set1')
     example_pred.save_coords_to_csv()

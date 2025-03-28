@@ -13,7 +13,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torchvision import transforms
 
 # debugging module
-from icecream import ic
+#from icecream import ic
 
 
 ###################################
@@ -280,7 +280,6 @@ class PrototypicalNetwork(nn.Module):
         """
         support["embeddings"] = self.embedding_layer(support["image"])
         query["embeddings"] = self.embedding_layer(query["image"])
-
         support_embeds = []
         for idx in range(len(support["classlist"])):
             embeds = support["embeddings"][support["target"] == idx]
