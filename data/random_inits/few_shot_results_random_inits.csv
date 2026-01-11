@@ -1,0 +1,7 @@
+,proto_acc,proto_std_dev,match_acc,match_std_dev,rel_acc,rel_std_dev,simpleshot_acc,simpleshot_std_dev
+"(3,15)_Ge(001)_40pix_inv",tensor(59.8113),tensor(0.8701),tensor(51.7777),tensor(3.2179),tensor(45.1240),tensor(4.5248),tensor(57.14),tensor(2.55)
+"(1,15)_Ge(001)_40pix_inv",tensor(53.2190),tensor(1.0041),tensor(42.2467),tensor(1.9753),tensor(39.6387),tensor(2.9102),tensor(49.59),tensor(2.23)
+"(3,15)_TiO2(110)_40pix_inv",tensor(67.6107),tensor(1.6395),tensor(62.5153),tensor(3.1162),tensor(63.5733),tensor(6.0908),tensor(70.31),tensor(2.13)
+"(1,15)_TiO2(110)_40pix_inv",tensor(67.5313),tensor(0.4460),tensor(55.9953),tensor(2.1474),tensor(62.9900),tensor(7.8488),tensor(61.50),tensor(2.17)
+"(3,15)_Si(001)_40pix_inv",tensor(98.0390),tensor(0.6071),tensor(70.5370),tensor(7.3290),tensor(57.4843),tensor(9.1095),tensor(93.53),tensor(2.44)
+"(1,15)_Si(001)_40pix_inv",tensor(95.1907),tensor(0.7685),tensor(74.2523),tensor(4.1292),tensor(80.6053),tensor(8.0209),tensor(86.69),tensor(3.79)

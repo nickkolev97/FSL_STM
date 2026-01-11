@@ -1019,6 +1019,54 @@ class Predictor(object):
         if labels == 'all':
             labels = [i for i in range(self.num_classes)]
 
+def create_spectrum_colormap(colors):
+    """
+    Creates a custom colormap that transitions from red to yellow to green with gray as the final color.
+    
+    Returns:
+        cmap: A custom matplotlib colormap
+    """
+    from matplotlib.colors import ListedColormap
+    
+    # Create a ListedColormap with your specific colors
+    cmap = ListedColormap(colors)
+    
+    return cmap
+
+
+def plane_level(array):
+    '''
+    Plane levels the scan. Assumes the whole scan is on the same plane.
+    Parameters:
+        array (np.array): The scan to be plane levelled.
+    Returns:
+        array_leveled (np.array): The plane levelled scan.
+    '''
+    
+    res = array.shape[0]
+    a = np.ogrid[0:res,0:res]
+    x_pts = np.tile(a[0],res).flatten()
+    y_pts = np.tile(a[1],res).flatten()
+    z_pts = array.flatten()
+    
+    X_data = np.hstack( ( np.expand_dims(x_pts, axis=1) , np.expand_dims(y_pts,axis=1) ) )
+    X_data = np.hstack( ( np.ones((x_pts.size,1)) , X_data ))
+    Y_data = np.reshape(z_pts, (x_pts.size, 1))
+    fit = np.dot(np.dot( np.linalg.pinv(np.dot(X_data.T, X_data)), X_data.T), Y_data)
+    
+    # print("coefficients of equation of plane, (a1, a2) 2: ", fit[0], fit[1])
+    # print("value of intercept, c2:", fit[2] )
+            
+    # make a grid to use for plane subtraction (using numpy's vectorisation)
+    x = np.linspace(0,res, num=res, endpoint = False, dtype=int)
+    y = np.linspace(0,res, num=res, endpoint = False, dtype=int)
+    grid = np.meshgrid(x,y)
+    
+    # perform plane subtraction
+    array_leveled = array - fit[2]*grid[0] - fit[1]*grid[1] - fit[0]
+    
+    return array_leveled
+
 
 if __name__ == "__main__":
     cwd = Path.cwd()
@@ -1049,10 +1097,10 @@ if __name__ == "__main__":
     #########
     # Earl's court Si(001)-H+AsH3    
     # undosed
-   # file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_0.npy')
-   # file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_1.npy')
-   # example_array_fwd = np.load(file_path_fwd)[72:1096,410:1434]
-   # example_array_bwd = np.load(file_path_bwd)[72:1096,410:1434]
+    file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_0.npy')
+    file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_1.npy')
+    example_array_fwd = np.load(file_path_fwd)[72:1096,410:1434]
+    example_array_bwd = np.load(file_path_bwd)[72:1096,410:1434]
     # dosed
    # file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_0.npy')
    # file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--26_2_1.npy')
@@ -1067,10 +1115,10 @@ if __name__ == "__main__":
 
     ############################
     # example Ge(001) arrays
-    file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
-    file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
-    example_array_fwd = np.load(file_path_fwd)   
-    example_array_bwd = np.load(file_path_bwd)
+    #file_path_fwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_0.npy')
+    #file_path_bwd = Path.joinpath(cwd, 'example_arrays', 'default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_1.npy')
+    #example_array_fwd = np.load(file_path_fwd)   
+    #example_array_bwd = np.load(file_path_bwd)
 
 
     # create FSL_Scan object
@@ -1079,23 +1127,27 @@ if __name__ == "__main__":
    # example_scan = FSL_Scan('m235','TiO2', example_array, size=10) 
    # example_scan = FSL_Scan('m63','TiO2', example_array, size=20) 
    
+    # plane level example_array_fwd
+    example_array_fwd[512:,:512] = plane_level(example_array_fwd[512:,:512])
+
+
    # Si(001)
    # example_scan = FSL_Scan('20230727_paddington_31_1','Si', example_array_fwd, scan_bwd = example_array_bwd, size=50) #Si(001)-H+PH3
    # example_scan = FSL_Scan('20231027-095207_Neasden Si(001)-H--STM_AtomManipulation--9_2_0_','Si', example_array, size=100) 
    # example_scan = FSL_Scan('20221213-141130_Brockley-Si(001)H-STM_AtomManipulation--23_2_0_','Si', example_array[], size=100) 
    # example_scan = FSL_Scan('20191122-195611_Chancery Lane-Si(001)H--24_6_0_','Si', example_array_fwd, example_array_bwd, size=100) 
    # Earl's court Si(001)-H+AsH3
-   # example_scan = FSL_Scan("Earl's court - undosed",'Si', example_array_fwd[512:,:512], example_array_bwd[512:,:512], size=50) # dosed
+    example_scan = FSL_Scan("Earl's court - undosed",'Si', example_array_fwd[512:,:512], example_array_bwd[512:,:512], size=50) # dosed
    # example_scan = FSL_Scan("Earl's courst - dosed",'Si', example_array_fwd, example_array_bwd, size=100) # undosed
    # example_scan = FSL_Scan("Earl's court - incorporated",'Si', example_array_fwd, example_array_bwd, size=100) # incorporate
 
 
    # Ge(001)
-    example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
+   # example_scan = FSL_Scan('default_2020Mar05-185936_STM-STM_Spectroscopy--29_4_','Ge', example_array_fwd, example_array_bwd, size=50) # Ge(001)
    
     #example_scan.plane_level()
 
-    example_pred = Predictor(example_scan, num_classes=7, num_labels=1)
+    example_pred = Predictor(example_scan, num_classes=5, num_labels=3)
     #np.save('{}_mask.npy'.format(example_pred.scan.name), example_pred.defect_mask )
 
     plt.imshow(example_scan.scan_fwd,cmap='gray')
@@ -1103,7 +1155,48 @@ if __name__ == "__main__":
     example_pred.label_support_set(transparency=0.4)
     example_pred.label_anomalies(transparency=0.4)
     example_pred.predict()
+    # Create the custom colormap
+    colors1 = [
+        (1.0, 0.0, 0.0),    # Red  2
+        (1.0, 1.0, 0.0),    # Yellow  3
+        (0, 0, 0.4),    # light blue  5
+        (0.0, 1.0, 0.0),    # Green  6
+        (1.0, 1.0, 1.0),    # White  8
+        (0.8, 0, 0.8),    # light blue  5
+        (0.6, 0.6, 0.6)     # Gray 10
+    ]
+
+    colors2 = [
+        (1.0, 0.0, 0.0),    # Red  2
+        (1.0, 1.0, 0.0),    # Yellow  3
+        (0.0, 0.0, 0.5),    # light blue  5
+        (0.0, 1.0, 0.0),    # Green  6
+        (1.0, 1.0, 1.0),    # White  8
+        (0.6, 0, 0.6),    # light blue  5
+        (0.6, 0.6, 0.6)     # Gray 10
+    ]
+
+    colors3 = [
+        (1.0, 0.0, 0.0),    # Red  2
+        (1.0, 1.0, 0.0),    # Yellow  3
+        (0, 0, 0.3),    # light blue  5
+        (0.0, 1.0, 0.0),    # Green  6
+        (0, 0, 0),          # Black 8
+        (1, 0,1),    # light blue  5
+        (0.6, 0.6, 0.6)     # Gray 10
+    ]
+
+    spectrum_cmap = create_spectrum_colormap(colors1)
+    spectrum_cmap2 = create_spectrum_colormap(colors2)
+    spectrum_cmap3 = create_spectrum_colormap(colors3)
     print(example_pred.defect_numbers()) # print number of defects in each class
-    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg='Set1')
-    #example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.55, cmap_scan='gray', cmap_seg='Set1')
-    example_pred.save_coords_to_csv()
+ #   example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.2, cmap_scan='gray', cmap_seg='RdYlGn')
+    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.2, cmap_scan='gray', cmap_seg=spectrum_cmap)
+    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg=spectrum_cmap2)
+    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg=spectrum_cmap3)
+   
+    #example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.5, cmap_scan='gray', cmap_seg='Set3')
+   # example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.5, cmap_scan='gray', cmap_seg='Set3')
+    #example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.5, cmap_scan='gray', cmap_seg='Set1')
+   # example_pred.display_image_with_mask('full', display_bwds = True, alpha=0.2, cmap_scan='gray', cmap_seg='Set1')
+   # example_pred.save_coords_to_csv()
