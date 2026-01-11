@@ -1,7 +1,0 @@
-,avg_acc,std_dev_acc,avg_precision,std_dev_precision,avg_recall,std_dev_recall
-"SimpleShot(3,15)_TiO2_40pix_inv",tensor(0.7079),tensor(0.0282),0.710081961,0.027232817,0.707873333,0.027957499
-"SimpleShot(1,15)_TiO2_40pix_inv",tensor(0.6200),tensor(0.0308),0.621389317,0.029973688,0.619953333,0.030445727
-"SimpleShot(3,15)_Ge(001)_40pix_inv",tensor(0.5686),tensor(0.0242),0.55687605,0.02323556,0.558622298,0.023851504
-"SimpleShot(1,15)_Ge(001)_40pix_inv",tensor(0.4893),tensor(0.0205),0.496706509,0.017017077,0.482456829,0.019725355
-"SimpleShot(3,15)_Si(001)_40pix_inv",tensor(0.9381),tensor(0.0197),0.939227162,0.018956743,0.938106667,0.019464548
-"SimpleShot(1,15)_Si(001)_40pix_inv",tensor(0.8739),tensor(0.0291),0.876843319,0.028040161,0.87389,0.028834193
