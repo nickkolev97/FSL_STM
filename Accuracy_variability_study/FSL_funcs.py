@@ -7,7 +7,7 @@ import math
 import time
 import os
 
-import FSL_models as FSLm
+from .. import FSL_models as FSLm
 
 # pytorch modules
 import torch
