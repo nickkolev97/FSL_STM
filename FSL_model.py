@@ -1,6 +1,3 @@
-import numpy as np
-from matplotlib import pyplot as plt
-import pandas as pd
 import math
 
 # pytorch modules
@@ -8,9 +5,6 @@ import torch
 import torch.nn as nn 
 from torchmetrics import Accuracy
 import pytorch_lightning as pl
-import tqdm
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from torchvision import transforms
 
 # debugging module
 #from icecream import ic

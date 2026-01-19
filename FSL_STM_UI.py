@@ -6,7 +6,7 @@ import cv2
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
-import FSL_model as mo
+import FSL_models as mo
 from pathlib import Path
 
 # debugging module
@@ -1097,8 +1097,8 @@ if __name__ == "__main__":
     #########
     # Earl's court Si(001)-H+AsH3    
     # undosed
-    file_path_fwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_0.npy')
-    file_path_bwd = Path.joinpath(cwd, 'example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_1.npy')
+    file_path_fwd = Path.joinpath(cwd, 'data/example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_0.npy')
+    file_path_bwd = Path.joinpath(cwd, 'data/example_arrays', '20181123-122007_STM_AtomManipulation-Earls Court-Si(100)-H term--14_2_1.npy')
     example_array_fwd = np.load(file_path_fwd)[72:1096,410:1434]
     example_array_bwd = np.load(file_path_bwd)[72:1096,410:1434]
     # dosed
@@ -1147,7 +1147,8 @@ if __name__ == "__main__":
    
     #example_scan.plane_level()
 
-    example_pred = Predictor(example_scan, num_classes=5, num_labels=3)
+#    example_pred = Predictor(example_scan, num_classes=5, num_labels=3)
+    example_pred = Predictor(example_scan, num_classes=2, num_labels=1) 
     #np.save('{}_mask.npy'.format(example_pred.scan.name), example_pred.defect_mask )
 
     plt.imshow(example_scan.scan_fwd,cmap='gray')
@@ -1192,8 +1193,8 @@ if __name__ == "__main__":
     print(example_pred.defect_numbers()) # print number of defects in each class
  #   example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.2, cmap_scan='gray', cmap_seg='RdYlGn')
     example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.2, cmap_scan='gray', cmap_seg=spectrum_cmap)
-    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg=spectrum_cmap2)
-    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg=spectrum_cmap3)
+#    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg=spectrum_cmap2)
+#    example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.4, cmap_scan='gray', cmap_seg=spectrum_cmap3)
    
     #example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.5, cmap_scan='gray', cmap_seg='Set3')
    # example_pred.display_image_with_mask('full', display_bwds = False, alpha=0.5, cmap_scan='gray', cmap_seg='Set3')
