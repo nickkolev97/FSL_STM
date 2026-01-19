@@ -1018,9 +1018,10 @@ if __name__ == "__main__":
         proto_recs = []
         match_recs = []
         rel_recs = []
+
         for train_features, val_features in zip(train_features_list, val_features_list):
             print('Training with train features: ', train_features, ' and val features: ', val_features)
-            results = FSL.train_save_match_proto_rel(n_way, n_support, n_query, n_train_episodes, train_features, val_features, test_features, args.save_folder, save_path)
+            results = FSL.train_save_match_proto_rel(x_all, y_all, n_way, n_support, n_query, n_train_episodes, n_test_episodes, train_features, val_features, test_features, args.save_folder, DEVICE = DEVICE, folder=save_path)
             proto_acc, match_acc, rel_acc, proto_prec_avg, match_prec_avg, rel_prec_avg, proto_rec_avg, match_rec_avg, rel_rec_avg = results
             proto_accs.append(proto_acc)
             match_accs.append(match_acc)
@@ -1105,7 +1106,7 @@ if __name__ == "__main__":
         rel_recs = []
         for train_features, val_features in zip(train_features_list, val_features_list):
             print('Training with train features: ', train_features, ' and val features: ', val_features)
-            results = FSL.train_save_match_proto_rel(n_way, n_support, n_query, n_train_episodes, train_features, val_features, test_features, args.save_folder, save_path)
+            results = FSL.train_save_match_proto_rel(x_all, y_all, n_way, n_support, n_query, n_train_episodes, n_test_episodes, train_features, val_features, test_features, args.save_folder, DEVICE = DEVICE, folder=save_path)
             proto_acc, match_acc, rel_acc, proto_prec_avg, match_prec_avg, rel_prec_avg, proto_rec_avg, match_rec_avg, rel_rec_avg = results
             proto_accs.append(proto_acc)
             match_accs.append(match_acc)
@@ -1205,7 +1206,7 @@ if __name__ == "__main__":
             print('Training with train features: ', train_features
                   , ' and val features: ', val_features,
                   ' and test features: ', test_features)
-            results = FSL.train_save_match_proto_rel(n_way, n_support, n_query, n_train_episodes, train_features, val_features, test_features, args.save_folder, save_path)
+            results = FSL.train_save_match_proto_rel(x_all, y_all, n_way, n_support, n_query, n_train_episodes, n_test_episodes, train_features, val_features, test_features, args.save_folder, DEVICE = DEVICE, folder=save_path)
             proto_acc, match_acc, rel_acc, proto_prec_avg, match_prec_avg, rel_prec_avg, proto_rec_avg, match_rec_avg, rel_rec_avg = results
             proto_accs.append(proto_acc)
             match_accs.append(match_acc)
@@ -1301,7 +1302,7 @@ if __name__ == "__main__":
             print('Training with train features: ', train_features
                   , ' and val features: ', val_features,
                   ' and test features: ', test_features)
-            results = FSL.train_save_match_proto_rel(n_way, n_support, n_query, n_train_episodes, train_features, val_features, test_features, args.save_folder, save_path)
+            results = FSL.train_save_match_proto_rel(x_all, y_all, n_way, n_support, n_query, n_train_episodes, n_test_episodes, train_features, val_features, test_features, args.save_folder, DEVICE = DEVICE, folder=save_path)
             proto_acc, match_acc, rel_acc, proto_prec_avg, match_prec_avg, rel_prec_avg, proto_rec_avg, match_rec_avg, rel_rec_avg = results
             proto_accs.append(proto_acc)
             match_accs.append(match_acc)
@@ -1396,7 +1397,7 @@ if __name__ == "__main__":
         for train_features, val_features in zip(train_features_list, val_features_list):
             print('Training with train features: ', train_features
                   , ' and val features: ', val_features)
-            results = FSL.train_save_match_proto_rel(n_way, n_support, n_query, n_train_episodes, train_features, val_features, test_features, args.save_folder, save_path)
+            results = FSL.train_save_match_proto_rel(x_all, y_all, n_way, n_support, n_query, n_train_episodes, n_test_episodes, train_features, val_features, test_features, args.save_folder, DEVICE = DEVICE, folder=save_path)
             proto_acc, match_acc, rel_acc, proto_prec_avg, match_prec_avg, rel_prec_avg, proto_rec_avg, match_rec_avg, rel_rec_avg = results
             proto_accs.append(proto_acc)
             match_accs.append(match_acc)
@@ -1491,7 +1492,7 @@ if __name__ == "__main__":
         for train_features, val_features in zip(train_features_list, val_features_list):
             print('Training with train features: ', train_features
                   , ' and val features: ', val_features)
-            results = FSL.train_save_match_proto_rel(n_way, n_support, n_query, n_train_episodes, train_features, val_features, test_features, args.save_folder, save_path)
+            results = FSL.train_save_match_proto_rel(x_all, y_all, n_way, n_support, n_query, n_train_episodes, n_test_episodes, train_features, val_features, test_features, args.save_folder, DEVICE = DEVICE, folder=save_path)
             proto_acc, match_acc, rel_acc, proto_prec_avg, match_prec_avg, rel_prec_avg, proto_rec_avg, match_rec_avg, rel_rec_avg = results
             proto_accs.append(proto_acc)
             match_accs.append(match_acc)

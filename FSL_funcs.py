@@ -61,10 +61,11 @@ class rotation(object):
         angle = random.choice(self.angles)
         return F.rotate(img, angle)
 
+
 class STM_bright_features(Dataset):
 
     def __init__(self, images, labels, res,
-            features: List[str] = None, training_set = False):# a list of features in the dataset e.g. dangling bond
+            features: List[str] = None, training_set = False, episodic=True):# a list of features in the dataset e.g. dangling bond
             # sizes: float = 1.0, # this is another thing that could be fed into it to help distinguish different features
                                  # since they're not all of the same size. For now we make all of them 11 pixels big
             # we could include other meta data in here too
@@ -84,6 +85,8 @@ class STM_bright_features(Dataset):
        # print(self.features)
         self.images = images
         self.labels = labels
+
+        self.episodic = episodic
      
         self.res = res
         # all crops should be of size (self.res,self.res)
@@ -104,10 +107,8 @@ class STM_bright_features(Dataset):
 
     @property
     def class_to_indices(self) -> Dict[str, List[int]]:
-        '''
-        Takes in a string describing the class, returns a dictionary with the class
-        string as its key and a list with the indices of that class as its value
-        '''
+        # takes in a string describing the class, returns a dictionary with the class
+        # string as its key and a list with the indices of that class as its value
         if not hasattr(self, "_class_to_indices"):
             self._class_to_indices = defaultdict(list)
             for i, image in enumerate(self.images):
@@ -116,10 +117,8 @@ class STM_bright_features(Dataset):
         return self._class_to_indices
 
     def refine_images(self):
-        '''
-        Picks out the images (and their corresponding labels) according to what was given
-        in the features list
-        '''
+        # picks out the images (and their corresponding labels) according to what was given
+        # in the features list
         fin_indices = [] # list that will contain the indices of the features we want in this dataset
         for feature in self.all_features:
             if feature in self.features:
@@ -148,7 +147,6 @@ class STM_bright_features(Dataset):
 
         return
 
-
     def __len__(self):
         return len(self.images)
 
@@ -172,9 +170,11 @@ class STM_bright_features(Dataset):
         # make mean 0 for each channel
         data['image'] = data['image'] - torch.mean(data['image'], dim=(0,1), keepdim=True)
 
-        return data
-    
-    
+        if self.episodic:
+            return data
+        else:
+            return data['image'], data['label']
+
     def split(self, test_size=0.3, random_state=42, episodic=False) -> Tuple['STM_bright_features', 'STM_bright_features']:
         """
         Splits the current dataset into training and validation datasets.
@@ -221,6 +221,7 @@ class STM_bright_features(Dataset):
         )
         
         return train_dataset, val_dataset
+
 
 
 class EpisodeDataset(Dataset):
@@ -353,7 +354,7 @@ def train_evaluate(fslNet, file_name, train_loader, val_episodes, n_way, epochs 
     confidenceInt: 95% confidence interval of the accuracies
   '''
   # define the FSL
-  learner = FSLm.FewShotLearner(fslNet) 
+  learner = FSLm.FewShotLearner(fslNet, n_way) 
   print(f'Doing {epochs} epochs of training')
 
   DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -424,7 +425,7 @@ def train_evaluate(fslNet, file_name, train_loader, val_episodes, n_way, epochs 
 
   eval_cb = EvalCallback(val_episodes, file_name, onehot)
 
-  trainer = pl.Trainer(accelerator=DEVICE, devices = 1, 
+  trainer = pl.Trainer(accelerator=DEVICE.type, devices = 1, 
                        max_epochs=epochs, callbacks=[eval_cb],
                        enable_checkpointing=False, logger=False, 
                        enable_progress_bar=False)
@@ -522,6 +523,80 @@ def evaluate(fslNet, save_path, test_episodes, test_features, onehot=True, DEVIC
   average_recall = np.mean( list(recalls.values()) )
 
   return learner, confidenceInt[0]*100, metric, total_acc, accuracies, std_dev, confidenceInt, precisions, recalls, average_precision, average_recall
+
+
+def evaluate_simpleshot(network, save_path, test_episodes, test_features, n_way, onehot=True, device='cpu'):
+    # list of accuracies
+    accuracies = []
+
+    # evaluate
+    network.eval()
+    network.to(device)
+    # instantiate the accuracy metric
+    metric = Accuracy(task = 'multiclass', num_classes=n_way).to(device)
+    pbar = tqdm.tqdm(range(len(test_episodes)))
+    all_predicted_labels = []
+    all_true_labels = []
+    for episode_idx in pbar:
+        support, query = test_episodes[episode_idx]
+        # get true labels -> temporary targets mapping
+        # support = {'image': numpy array of shape (number of crops, num_channels, res, res),
+        #            'target': numpy array of shape (number of crops, y_values for this episode)
+        #            'true_target': numpy array of shape (number of crops, true y_values)}
+        support_crops, support_labels = support['image'].to(device), support['target'].to(device)
+        query_crops, query_labels = query['image'].to(device), query['target'].to(device)
+
+        label_to_target = {target.item(): label.item() for label, target in zip(support['label'], support['target'])}
+        # get the logits/embeddings?
+        logits, distances, x_q, x_s_norm = network(query_crops, support_crops, support_labels, n_way)
+        if not onehot:
+            logits = torch.round(logits)
+        # compute the accuracy
+        acc = metric(logits, query["target"].to(device))
+        pbar.set_description(f"Episode {episode_idx} // Accuracy: {acc.item():.2f}")
+        accuracies.append(acc)
+        metric.reset()
+        if onehot:
+            # convert the logits to their true label predictions
+            predicted_targets = torch.argmax(logits, dim=1)
+        else:
+            predicted_targets = logits
+        predicted_labels = torch.zeros(predicted_targets.shape)
+        for i in range(len(predicted_targets)):
+            predicted_labels[i] = label_to_target[predicted_targets[i].item()]
+        # append to lists of all_labels
+        all_predicted_labels.append(predicted_labels)
+        all_true_labels.append(query['label'])
+
+    std_dev = torch.std(torch.tensor(accuracies))
+    total_acc = torch.mean(torch.tensor(accuracies))
+    confidenceInt = 1.96*std_dev/torch.sqrt(torch.tensor([len(accuracies)])) # 95% confidence interval assumin normal distributions
+    print(f"Total accuracy, averaged across all episodes: {total_acc*100} +/- {confidenceInt[0]*100}")
+
+    # make a confusion matrix, and calculate the micro-average precision+recall
+    all_predicted_labels = torch.cat(all_predicted_labels).cpu().numpy()
+    all_true_labels = torch.cat(all_true_labels).cpu().numpy()
+    confusion_matrxi = plot_confusion_matrix(all_true_labels, all_predicted_labels, np.unique(all_true_labels), test_features, save_path)
+    
+    # get precision and recall from the cm for each class
+    precisions = {}
+    recalls = {}
+    for i in range(confusion_matrxi.shape[0]):
+        TP = confusion_matrxi[i,i]
+        FP = np.sum(confusion_matrxi[:,i]) - TP
+        FN = np.sum(confusion_matrxi[i,:]) - TP
+        precision = TP/(TP+FP) if (TP+FP)>0 else 0
+        recall = TP/(TP+FN) if (TP+FN)>0 else 0
+        print(f'Class {test_features[i]}: Precision: {precision*100:.2f} %, Recall: {recall*100:.2f} %')
+        time.sleep(1)
+        precisions[i] = precision
+        recalls[i] = recall
+
+    average_precision = np.mean( list(precisions.values()) )
+    average_recall = np.mean( list(recalls.values()) )
+
+    return network, metric, total_acc, accuracies, std_dev, confidenceInt, precisions, recalls, average_precision, average_recall
+
 
 def plot_confusion_matrix(y_true, y_pred, labels, label_names, save_path, save_fig=False):
     '''
@@ -811,12 +886,12 @@ def simple_shot_training_eval(x, y, train_val_features, test_features, n_way, su
 
         # test the simple shot model
         # we need to do it over 100 eps for both 3-shot and 1-shot
-        simple_shot, metric3, total_acc3, accuracies3, std_dev3, confidenceInt3, precisions3, recalls3, average_precision3, average_recall3 = evaluate(simple_shot, f'SimpleShotembeddor_{substrate}_(3,{n_query})_eval', episodic_test_data_3shot, test_features, n_way, onehot=False)
+        simple_shot, metric3, total_acc3, accuracies3, std_dev3, confidenceInt3, precisions3, recalls3, average_precision3, average_recall3 = evaluate_simpleshot(simple_shot, f'SimpleShotembeddor_{substrate}_(3,{n_query})_eval', episodic_test_data_3shot, test_features, n_way, onehot=False, device = device)
         tot_accuracies_list3.append(total_acc3)
         tot_precisions_list3.append(average_precision3)
         tot_recalls_list3.append(average_recall3)
 
-        simple_shot, metric1, total_acc1, accuracies1, std_dev1, confidenceInt1, precisions1, recalls1, average_precision1, average_recall1 = evaluate(simple_shot, f'SimpleShotembeddor_{substrate}_(3,{n_query})_eval', episodic_test_data_1shot, test_features, n_way, onehot=False)
+        simple_shot, metric1, total_acc1, accuracies1, std_dev1, confidenceInt1, precisions1, recalls1, average_precision1, average_recall1 = evaluate_simpleshot(simple_shot, f'SimpleShotembeddor_{substrate}_(3,{n_query})_eval', episodic_test_data_1shot, test_features, n_way, onehot=False, device = device)
         tot_accuracies_list1.append(total_acc1)
         tot_precisions_list1.append(average_precision1)
         tot_recalls_list1.append(average_recall1)
